@@ -410,7 +410,6 @@ async fn run_session(cfg: &Config) -> Result<()> {
     let tcping = tokio::spawn(tcping_loop(msg_tx.clone(), shared.clone()));
     let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
 
-    // metrics loop (current task)
     let metrics = async {
         let mut sys = System::new_with_specifics(
             RefreshKind::nothing()
@@ -458,8 +457,6 @@ async fn run_session(cfg: &Config) -> Result<()> {
             let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, elapsed);
             msg_tx.send(AgentMsg::Metrics { data: metrics })?;
         }
-        #[allow(unreachable_code)]
-        Ok::<(), mpsc::error::SendError<AgentMsg>>(())
     };
 
     tokio::select! {
@@ -467,7 +464,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
         _ = reader => anyhow::bail!("ws reader ended"),
         _ = tcping => anyhow::bail!("tcping loop ended"),
         _ = unlock => anyhow::bail!("unlock loop ended"),
-        r = metrics => r?,
+        r = metrics => r.map_err(|e| anyhow::anyhow!("metrics loop: {e}")),
     }
 }
 
