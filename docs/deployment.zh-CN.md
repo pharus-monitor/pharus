@@ -21,12 +21,25 @@
 
 ### 方式 A：单二进制 + systemd（推荐）
 
-**1. 获取二进制**
+**1. 下载预编译二进制**
 
-从 [Releases](https://github.com/pharus-monitor/pharus/releases) 下载对应架构，或自行交叉编译：
+从 [Releases](https://github.com/pharus-monitor/pharus/releases) 下载对应架构
+（`x86_64` / `i686` / `aarch64`，全部为 musl 静态编译，任何发行版可直接运行）：
 
 ```bash
-# 在开发机上交叉编译 Linux x86_64 静态包（musl）
+# Server 包：内含 pharus + themes/ + deploy/
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-linux-x86_64.tar.gz
+
+# 可选：校验完整性
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+
+tar -xzf pharus-linux-x86_64.tar.gz
+```
+
+也可以自行从源码编译：
+
+```bash
 rustup target add x86_64-unknown-linux-musl
 cargo build --release -p pharus --target x86_64-unknown-linux-musl
 # 产物：target/x86_64-unknown-linux-musl/release/pharus
@@ -168,6 +181,10 @@ curl -fsSL https://raw.githubusercontent.com/pharus-monitor/pharus/main/scripts/
 ### 方式 B：手动安装 + systemd
 
 ```bash
+# 0. 下载预编译 Agent（x86_64 / i686 / aarch64）
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-agent-linux-x86_64.tar.gz
+tar -xzf pharus-agent-linux-x86_64.tar.gz
+
 # 1. 放置二进制
 sudo cp pharus-agent /usr/local/bin/pharus-agent
 sudo chmod +x /usr/local/bin/pharus-agent

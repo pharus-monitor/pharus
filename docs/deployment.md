@@ -22,12 +22,26 @@ This document covers the full production deployment workflow.
 
 ### Option A: single binary + systemd (recommended)
 
-**1. Get the binary**
+**1. Download the prebuilt binary**
 
-Download the matching architecture from [Releases](https://github.com/pharus-monitor/pharus/releases) (`linux-x86_64`, `linux-i686`, `linux-aarch64`), or cross-compile it yourself:
+Grab the matching architecture from
+[Releases](https://github.com/pharus-monitor/pharus/releases)
+(`x86_64` / `i686` / `aarch64`; all static musl builds, work on any distro):
 
 ```bash
-# Cross-compile a static Linux x86_64 build (musl)
+# Server package: contains pharus + themes/ + deploy/
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-linux-x86_64.tar.gz
+
+# Optional: verify integrity
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+
+tar -xzf pharus-linux-x86_64.tar.gz
+```
+
+Or build from source instead:
+
+```bash
 rustup target add x86_64-unknown-linux-musl
 cargo build --release -p pharus --target x86_64-unknown-linux-musl
 # Output: target/x86_64-unknown-linux-musl/release/pharus
@@ -169,6 +183,10 @@ The script automatically: downloads the matching `pharus-agent` build → writes
 ### Option B: manual install + systemd
 
 ```bash
+# 0. Download the prebuilt agent (x86_64 / i686 / aarch64)
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-agent-linux-x86_64.tar.gz
+tar -xzf pharus-agent-linux-x86_64.tar.gz
+
 # 1. Install the binary
 sudo cp pharus-agent /usr/local/bin/pharus-agent
 sudo chmod +x /usr/local/bin/pharus-agent
