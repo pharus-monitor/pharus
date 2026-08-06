@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 pharus-common = { path = "../common" }
 tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

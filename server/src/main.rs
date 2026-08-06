@@ -4,11 +4,8 @@ mod ws;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{
-        ws::WebSocketUpgrade,
-        State,
-    },
-    response::Json,
+    extract::{ws::WebSocketUpgrade, Request, State},
+    response::{IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -20,6 +17,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast;
+use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
@@ -46,6 +44,13 @@ enum Command {
     },
     /// Register an agent and print its token
     AddAgent {
+        #[arg(long)]
+        name: String,
+        #[arg(long, env = "PHARUS_DB", default_value = "pharus.db")]
+        db: PathBuf,
+    },
+    /// Set the active theme (takes effect immediately, no restart)
+    SetTheme {
         #[arg(long)]
         name: String,
         #[arg(long, env = "PHARUS_DB", default_value = "pharus.db")]
@@ -85,6 +90,15 @@ fn current_theme_dir(state: &SharedState) -> PathBuf {
     state.themes_root.join(name)
 }
 
+async fn themed_static(State(state): State<SharedState>, req: Request) -> Response {
+    let theme_dir = current_theme_dir(&state);
+    let svc = ServeDir::new(&theme_dir).fallback(ServeFile::new(theme_dir.join("index.html")));
+    match svc.oneshot(req).await {
+        Ok(res) => res.into_response(),
+        Err(e) => match e {},
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -104,6 +118,14 @@ async fn main() -> Result<()> {
             println!("  id    = {id}");
             println!("  name  = {name}");
             println!("  token = {token}");
+            Ok(())
+        }
+        Command::SetTheme { name, db } => {
+            let conn = rusqlite::Connection::open(&db)
+                .with_context(|| format!("open db {}", db.display()))?;
+            db::init(&conn)?;
+            db::set_setting(&conn, "current_theme", &name)?;
+            println!("current_theme = {name}");
             Ok(())
         }
         Command::Serve { addr, db, themes } => serve(addr, db, themes).await,
@@ -160,19 +182,15 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf) -> Result<(
         });
     }
 
-    let theme_dir = current_theme_dir(&state);
-    let index = ServeFile::new(theme_dir.join("index.html"));
-    let static_service = ServeDir::new(&theme_dir).fallback(index);
-
     let app = Router::new()
         .route("/ws/agent", get(agent_ws))
         .route("/api/stream", get(browser_ws))
         .route("/api/status", get(status_json))
-        .fallback_service(static_service)
+        .fallback(themed_static)
         .with_state(state);
 
     let addr: SocketAddr = addr.parse().context("invalid listen addr")?;
-    info!(%addr, theme_dir = %theme_dir.display(), "pharus server listening");
+    info!(%addr, themes_root = %themes_root.display(), "pharus server listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())

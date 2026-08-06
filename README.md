@@ -100,6 +100,12 @@ comes from the WebSocket `/api/stream` (JSON delta protocol), with REST
 `/api/status` as a fallback. Translations live in `i18n/*.json` inside the theme.
 See the bundled `server/themes/default/`.
 
+Switch themes at runtime — no restart needed:
+
+```bash
+./pharus set-theme --name <theme>
+```
+
 ## Protocol
 
 Shared message types live in the `common/` crate, JSON over WebSocket:

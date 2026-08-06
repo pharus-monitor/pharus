@@ -21,8 +21,8 @@ struct Args {
     token: Option<String>,
 
     /// Report interval in seconds
-    #[arg(long, env = "PHARUS_INTERVAL", default_value_t = 3)]
-    interval: u64,
+    #[arg(long, env = "PHARUS_INTERVAL")]
+    interval: Option<u64>,
 
     /// Path to a TOML config file
     #[arg(long, env = "PHARUS_CONFIG")]
@@ -59,10 +59,9 @@ impl Config {
             server: pick(args.server, file.as_ref().and_then(|f| f.server.clone()), "server")?,
             token: pick(args.token, file.as_ref().and_then(|f| f.token.clone()), "token")?,
             interval: args
-                .config
-                .as_ref()
-                .and_then(|_| file.as_ref().and_then(|f| f.interval))
-                .unwrap_or(args.interval),
+                .interval
+                .or_else(|| file.as_ref().and_then(|f| f.interval))
+                .unwrap_or(3),
         })
     }
 }
@@ -155,9 +154,17 @@ async fn run_session(cfg: &Config) -> Result<()> {
 
     let mut tick = interval(Duration::from_secs(cfg.interval.max(1)));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // the first tick fires immediately; discard it so the first network
+    // sample accumulates over a full interval
+    tick.tick().await;
 
+    let mut last_tick = std::time::Instant::now();
     loop {
         tick.tick().await;
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(last_tick).as_secs().max(1);
+        last_tick = now;
+
         sys.refresh_cpu_usage();
         sys.refresh_memory();
         disks.refresh(true);
@@ -170,7 +177,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
         prev_rx = rx;
         prev_tx = tx;
 
-        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, cfg.interval);
+        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, elapsed);
         let msg = serde_json::to_string(&AgentMsg::Metrics { data: metrics })?;
         write.send(Message::Text(msg)).await?;
     }
@@ -190,9 +197,14 @@ async fn main() -> Result<()> {
 
     let mut backoff = 1u64;
     loop {
+        let started = std::time::Instant::now();
         match run_session(&cfg).await {
             Ok(()) => warn!("session ended, reconnecting"),
             Err(e) => error!(error = %e, "session error, reconnecting"),
+        }
+        // a session that stayed up for a while was healthy: reset backoff
+        if started.elapsed() >= Duration::from_secs(60) {
+            backoff = 1;
         }
         sleep(Duration::from_secs(backoff)).await;
         backoff = (backoff * 2).min(30);

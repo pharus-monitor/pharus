@@ -27,6 +27,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -z "$SERVER" || -z "$TOKEN" ]] && usage
+[[ "$INTERVAL" =~ ^[0-9]+$ ]] || { echo "--interval must be a number (seconds)" >&2; exit 1; }
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run as root or via sudo" >&2

@@ -91,6 +91,7 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
     {
         let mut agents = state.agents.write().unwrap();
         let entry = agents.entry(agent_id).or_default();
+        entry.name = name.clone();
         entry.online = true;
         entry.conn_epoch = epoch;
     }

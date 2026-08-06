@@ -96,6 +96,12 @@ docker compose --profile agent up -d    # 同机跑 agent（可选）
 （JSON 增量协议），兜底 REST `/api/status`。翻译文件在主题内的 `i18n/*.json`。
 参考内置 `server/themes/default/`。
 
+运行时切换主题，无需重启：
+
+```bash
+./pharus set-theme --name <theme>
+```
+
 ## 协议
 
 两端共享的消息结构定义在 `common/` crate，JSON over WebSocket：
