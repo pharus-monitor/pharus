@@ -263,43 +263,41 @@ async fn unlock_loop(msg_tx: MsgTx, client: reqwest::Client) {
 fn task_command(kind: TaskKind, target: &str) -> Option<tokio::process::Command> {
     #[cfg(windows)]
     let cmd = {
-        let mut c = std::process::Command::new("cmd");
-        match kind {
+        let c = match kind {
             TaskKind::Ping => {
-                c.args(["/C", "ping", "-n", "4", target]);
+                let c = std::process::Command::new("ping");
+                c.args(["-n", "4", target])
             }
             TaskKind::Traceroute => {
-                c.args(["/C", "tracert", target]);
+                let c = std::process::Command::new("tracert");
+                c.arg(target)
             }
             TaskKind::Mtr => return None,
             TaskKind::Script => {
-                c.args(["/C", target]);
+                let c = std::process::Command::new("cmd");
+                c.args(["/C", target])
             }
-        }
+        };
         c
     };
     #[cfg(not(windows))]
     let cmd = {
-        let mut c = match kind {
+        let c = match kind {
             TaskKind::Ping => {
-                let mut c = std::process::Command::new("ping");
-                c.args(["-c", "4", "-W", "2", target]);
-                c
+                let c = std::process::Command::new("ping");
+                c.args(["-c", "4", "-W", "2", target])
             }
             TaskKind::Traceroute => {
-                let mut c = std::process::Command::new("traceroute");
-                c.arg(target);
-                c
+                let c = std::process::Command::new("traceroute");
+                c.arg(target)
             }
             TaskKind::Mtr => {
-                let mut c = std::process::Command::new("mtr");
-                c.args(["-r", "-c", "4", target]);
-                c
+                let c = std::process::Command::new("mtr");
+                c.args(["-r", "-c", "4", target])
             }
             TaskKind::Script => {
-                let mut c = std::process::Command::new("sh");
-                c.args(["-c", target]);
-                c
+                let c = std::process::Command::new("sh");
+                c.args(["-c", target])
             }
         };
         c
@@ -464,7 +462,11 @@ async fn run_session(cfg: &Config) -> Result<()> {
         _ = reader => anyhow::bail!("ws reader ended"),
         _ = tcping => anyhow::bail!("tcping loop ended"),
         _ = unlock => anyhow::bail!("unlock loop ended"),
-        r = metrics => r.map_err(|e| anyhow::anyhow!("metrics loop: {e}")),
+        r = metrics => async {
+            r.map_err(|e: mpsc::error::SendError<AgentMsg>| anyhow::anyhow!("metrics loop: {e}"))
+        }
+        .await
+        .and_then(|r| r),
     }
 }
 
