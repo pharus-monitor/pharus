@@ -1,9 +1,10 @@
-use pharus_common::{AgentSnapshot, BrowserMsg, Metrics, SystemInfo, TrafficUsage};
+use pharus_common::{AgentSnapshot, BrowserMsg, Metrics, PingResult, SystemInfo, TrafficUsage, UnlockResult};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Default)]
 pub struct TrafficState {
@@ -23,6 +24,11 @@ pub struct AgentState {
     pub data: Option<Metrics>,
     pub billing: Option<pharus_common::BillingInfo>,
     pub traffic: TrafficState,
+    pub pings: Vec<PingResult>,
+    pub unlock: Vec<UnlockResult>,
+    /// Channel to push server→agent messages onto the live socket.
+    /// None when the agent is offline.
+    pub agent_tx: Option<mpsc::UnboundedSender<pharus_common::ServerToAgentMsg>>,
 }
 
 impl AgentState {
@@ -39,6 +45,8 @@ impl AgentState {
                 rx_bytes: self.traffic.rx_bytes,
                 tx_bytes: self.traffic.tx_bytes,
             }),
+            pings: self.pings.clone(),
+            unlock: self.unlock.clone(),
         }
     }
 }
@@ -50,6 +58,8 @@ pub struct AppState {
     pub browser_tx: broadcast::Sender<BrowserMsg>,
     pub themes_root: PathBuf,
     pub admin_token: Option<String>,
+    /// Pending one-shot waiters for task results keyed by task_id.
+    pub task_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<pharus_common::AgentMsg>>>,
 }
 
 impl AppState {

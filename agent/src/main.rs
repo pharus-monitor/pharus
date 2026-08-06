@@ -409,66 +409,66 @@ async fn run_session(cfg: &Config) -> Result<()> {
     let tcping = tokio::spawn(tcping_loop(msg_tx.clone(), shared.clone()));
     let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
 
-    let metrics = async {
-        let mut sys = System::new_with_specifics(
-            RefreshKind::nothing()
-                .with_cpu(CpuRefreshKind::everything())
-                .with_memory(MemoryRefreshKind::everything()),
-        );
-        let mut disks = Disks::new_with_refreshed_list();
-        let mut networks = Networks::new_with_refreshed_list();
-
-        sys.refresh_cpu_usage();
-        sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
-
-        msg_tx.send(AgentMsg::SysInfo {
-            info: collect_sysinfo(&sys),
-        })?;
-
-        let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
-        let mut prev_tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
-
-        let mut tick = interval(Duration::from_secs(cfg.interval.max(1)));
-        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        // the first tick fires immediately; discard it so the first network
-        // sample accumulates over a full interval
-        tick.tick().await;
-
-        let mut last_tick = std::time::Instant::now();
-        loop {
-            tick.tick().await;
-            let now = std::time::Instant::now();
-            let elapsed = now.duration_since(last_tick).as_secs().max(1);
-            last_tick = now;
-
-            sys.refresh_cpu_usage();
-            sys.refresh_memory();
-            disks.refresh(true);
-            networks.refresh(false);
-
-            let rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
-            let tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
-            let rx_diff = rx.saturating_sub(prev_rx);
-            let tx_diff = tx.saturating_sub(prev_tx);
-            prev_rx = rx;
-            prev_tx = tx;
-
-            let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, elapsed);
-            msg_tx.send(AgentMsg::Metrics { data: metrics })?;
-        }
-    };
+    let metrics = metrics_loop(msg_tx.clone(), cfg);
 
     tokio::select! {
         _ = writer => anyhow::bail!("ws writer ended"),
         _ = reader => anyhow::bail!("ws reader ended"),
         _ = tcping => anyhow::bail!("tcping loop ended"),
         _ = unlock => anyhow::bail!("unlock loop ended"),
-        r = metrics => async {
-            let r: Result<(), mpsc::error::SendError<AgentMsg>> = r.await;
-            r.map_err(|e| anyhow::anyhow!("metrics loop: {e}"))
-        }
-        .await
-        .and_then(|()| Ok(())),
+        r = metrics => r.map_err(|e| anyhow::anyhow!("metrics loop: {e}")),
+    }
+}
+
+async fn metrics_loop(
+    msg_tx: MsgTx,
+    cfg: &Config,
+) -> Result<(), mpsc::error::SendError<AgentMsg>> {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::everything())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
+    let mut disks = Disks::new_with_refreshed_list();
+    let mut networks = Networks::new_with_refreshed_list();
+
+    sys.refresh_cpu_usage();
+    sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
+
+    msg_tx.send(AgentMsg::SysInfo {
+        info: collect_sysinfo(&sys),
+    })?;
+
+    let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
+    let mut prev_tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
+
+    let mut tick = interval(Duration::from_secs(cfg.interval.max(1)));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // the first tick fires immediately; discard it so the first network
+    // sample accumulates over a full interval
+    tick.tick().await;
+
+    let mut last_tick = std::time::Instant::now();
+    loop {
+        tick.tick().await;
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(last_tick).as_secs().max(1);
+        last_tick = now;
+
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        disks.refresh(true);
+        networks.refresh(false);
+
+        let rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
+        let tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
+        let rx_diff = rx.saturating_sub(prev_rx);
+        let tx_diff = tx.saturating_sub(prev_tx);
+        prev_rx = rx;
+        prev_tx = tx;
+
+        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, elapsed);
+        msg_tx.send(AgentMsg::Metrics { data: metrics })?;
     }
 }
 

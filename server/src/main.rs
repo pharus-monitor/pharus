@@ -166,6 +166,7 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
         browser_tx,
         themes_root: themes_root.clone(),
         admin_token,
+        task_waiters: Mutex::new(HashMap::new()),
     });
 
     {

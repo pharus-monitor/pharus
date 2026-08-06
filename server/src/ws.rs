@@ -88,12 +88,15 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
     let epoch = state
         .next_epoch
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (agent_tx, mut agent_rx) =
+        tokio::sync::mpsc::unbounded_channel::<pharus_common::ServerToAgentMsg>();
     {
         let mut agents = state.agents.write().unwrap();
         let entry = agents.entry(agent_id).or_default();
         entry.name = name.clone();
         entry.online = true;
         entry.conn_epoch = epoch;
+        entry.agent_tx = Some(agent_tx);
     }
     state.broadcast(BrowserMsg::Status {
         agent_id,
@@ -102,50 +105,86 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
     info!(agent_id, name, "agent connected");
 
     loop {
-        let next = tokio::time::timeout(AGENT_OFFLINE_TIMEOUT, read.next()).await;
-        let msg = match next {
-            Ok(Some(Ok(Message::Text(t)))) => t,
-            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(e))) => {
-                warn!(agent_id, error = %e, "agent ws error");
-                break;
-            }
-            Ok(None) => break,
-            Err(_) => {
-                warn!(agent_id, "agent report timeout, marking offline");
-                break;
-            }
-        };
-
-        match serde_json::from_str::<AgentMsg>(&msg) {
-            Ok(AgentMsg::SysInfo { info }) => {
-                let mut agents = state.agents.write().unwrap();
-                if let Some(a) = agents.get_mut(&agent_id) {
-                    a.info = Some(info);
-                }
-            }
-            Ok(AgentMsg::Metrics { data }) => {
-                {
-                    let mut agents = state.agents.write().unwrap();
-                    if let Some(a) = agents.get_mut(&agent_id) {
-                        let default_billing = pharus_common::BillingInfo::default();
-                        let b = a.billing.as_ref().unwrap_or(&default_billing);
-                        crate::billing::apply_metrics(&mut a.traffic, b, &data, chrono::Local::now());
-                        a.data = Some(data.clone());
+        tokio::select! {
+            next = tokio::time::timeout(AGENT_OFFLINE_TIMEOUT, read.next()) => {
+                let msg = match next {
+                    Ok(Some(Ok(Message::Text(t)))) => t,
+                    Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
+                    Ok(Some(Ok(_))) => continue,
+                    Ok(Some(Err(e))) => {
+                        warn!(agent_id, error = %e, "agent ws error");
+                        break;
                     }
+                    Ok(None) => break,
+                    Err(_) => {
+                        warn!(agent_id, "agent report timeout, marking offline");
+                        break;
+                    }
+                };
+                match serde_json::from_str::<AgentMsg>(&msg) {
+                    Ok(AgentMsg::SysInfo { info }) => {
+                        let mut agents = state.agents.write().unwrap();
+                        if let Some(a) = agents.get_mut(&agent_id) {
+                            a.info = Some(info);
+                        }
+                    }
+                    Ok(AgentMsg::Metrics { data }) => {
+                        {
+                            let mut agents = state.agents.write().unwrap();
+                            if let Some(a) = agents.get_mut(&agent_id) {
+                                let default_billing = pharus_common::BillingInfo::default();
+                                let b = a.billing.as_ref().unwrap_or(&default_billing);
+                                crate::billing::apply_metrics(&mut a.traffic, b, &data, chrono::Local::now());
+                                a.data = Some(data.clone());
+                            }
+                        }
+                        state.broadcast(BrowserMsg::Metrics {
+                            agent_id,
+                            online: true,
+                            data,
+                        });
+                    }
+                    Ok(AgentMsg::Ping { results }) => {
+                        let mut agents = state.agents.write().unwrap();
+                        if let Some(a) = agents.get_mut(&agent_id) {
+                            a.pings = results.clone();
+                        }
+                        state.broadcast(BrowserMsg::Pings { agent_id, results });
+                    }
+                    Ok(AgentMsg::Unlock { results }) => {
+                        let mut agents = state.agents.write().unwrap();
+                        if let Some(a) = agents.get_mut(&agent_id) {
+                            a.unlock = results.clone();
+                        }
+                        state.broadcast(BrowserMsg::Unlock { agent_id, results });
+                    }
+                    Ok(AgentMsg::TaskResult { task_id, .. }) => {
+                        // hand off to any admin handler waiting on this task
+                        if let Some(tx) = state.task_waiters.lock().unwrap().remove(&task_id) {
+                            let _ = tx.send(
+                                serde_json::from_str::<AgentMsg>(&msg)
+                                    .unwrap_or(AgentMsg::TaskResult { task_id: task_id.clone(), exit_code: -1, output: "parse error".into() }),
+                            );
+                        }
+                    }
+                    Ok(AgentMsg::Auth { .. }) => {
+                        warn!(agent_id, "unexpected re-auth, dropping");
+                        break;
+                    }
+                    Err(e) => warn!(agent_id, error = %e, "bad agent message"),
                 }
-                state.broadcast(BrowserMsg::Metrics {
-                    agent_id,
-                    online: true,
-                    data,
-                });
             }
-            Ok(AgentMsg::Auth { .. }) => {
-                warn!(agent_id, "unexpected re-auth, dropping");
-                break;
+            down = agent_rx.recv() => {
+                match down {
+                    Some(m) => {
+                        let Ok(s) = serde_json::to_string(&m) else { continue };
+                        if write.send(Message::Text(s)).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
             }
-            Err(e) => warn!(agent_id, error = %e, "bad agent message"),
         }
     }
 
@@ -154,6 +193,7 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
         if let Some(a) = agents.get_mut(&agent_id) {
             if a.conn_epoch == epoch {
                 a.online = false;
+                a.agent_tx = None;
             } else {
                 return;
             }
