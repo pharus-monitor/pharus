@@ -4,8 +4,7 @@
 > system written in Rust. Every monitored machine is a point at sea; Pharus is
 > the lighthouse that keeps watch and tells you who is online and how they are doing.
 
-An alternative to ServerStatus / Nezha / Beszel / Komari, aiming for smaller
-resource footprint and memory safety.
+A lightweight server monitoring system written in Rust.
 
 [简体中文](README.zh-CN.md)
 

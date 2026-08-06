@@ -3,7 +3,7 @@
 > **Pharus**（古希腊语 *pharos*，灯塔）—— 用 Rust 编写的轻量级服务器监控系统。
 > 每台被监控机如海上一个点，Pharus 是那座持续守望的灯塔。
 
-对标 ServerStatus / 哪吒 / Beszel / Komari，追求更小的资源占用与内存安全。
+一个用 Rust 编写的轻量级服务器监控系统。
 
 [English](README.md)
 
