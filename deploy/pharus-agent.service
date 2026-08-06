@@ -1,0 +1,17 @@
+[Unit]
+Description=Pharus monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/pharus-agent --config /etc/pharus/agent.toml
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

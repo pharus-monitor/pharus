@@ -39,6 +39,9 @@ cargo build --release
 
 打开 `http://<server>:8080` 即可看到实时面板。
 
+> 生产环境完整部署（systemd、Docker、HTTPS 反代、Windows 被控端、排错）：
+> **[docs/deployment.md](docs/deployment.md)**
+
 ### 配置
 
 Server 与 Agent 均支持命令行参数与环境变量：
