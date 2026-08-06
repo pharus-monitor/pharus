@@ -1,0 +1,98 @@
+# Pharus · 灯塔
+
+> **Pharus**（古希腊语 *pharos*，灯塔）—— 用 Rust 编写的轻量级服务器监控系统。
+> 每台被监控机如海上一个点，Pharus 是那座持续守望的灯塔。
+
+对标 ServerStatus / 哪吒 / Beszel / Komari，追求更小的资源占用与内存安全。
+
+[English](README.md)
+
+## 特性（MVP）
+
+- **Rust 全栈**：Agent 常驻内存 1–3MB 级别，无 GC 停顿
+- **单二进制**：无运行时依赖，musl 静态链接，适配各种 VPS
+- **实时推送**：WebSocket 双端推送，前端免轮询
+- **SQLite 存储**：单文件零运维，60s 降采样历史
+- **主题系统**：前端整模板可替换，`themes/` 加载 + `current_theme` 切换
+- **多语言界面**：English / 中文 / 日本語 / Русский，自动匹配浏览器语言
+- **断线重连**：指数退避 1s 到 30s 封顶；15s 无上报判定离线
+
+路线图（二期/进阶）：Ping/TCPing 动态监控、自定义任务、Looking Glass / MTR / iperf3、
+告警通知、流媒体解锁检测、主题商店等，详见设计大纲。
+
+## 架构
+
+Agent 主动出站连 Server（NAT 友好），单连接双向复用；Server 内存保存实时状态，
+每 60s 降采样写入 SQLite，并经 `/api/stream` 把增量推给浏览器。
+
+## 快速开始
+
+从 [Releases](https://github.com/pharus-monitor/pharus/releases) 下载预编译静态
+二进制（x86_64 / i686 / aarch64），或从源码构建：
+
+```bash
+cargo build --release
+
+# 1. 注册一台被监控机，得到 token
+./pharus add-agent --name my-vps
+
+# 2. 启动 Server（默认 0.0.0.0:8080）
+./pharus serve --themes server/themes
+
+# 3. 在被监控机上启动 Agent
+./pharus-agent --server ws://<server>:8080/ws/agent --token <token>
+```
+
+打开 `http://<server>:8080` 即可看到实时面板。
+
+> 生产环境完整部署（systemd、Docker、HTTPS 反代、Windows 被控端、排错）：
+> **[docs/deployment.zh-CN.md](docs/deployment.zh-CN.md)**
+
+### 配置
+
+Server 与 Agent 均支持命令行参数与环境变量：
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `PHARUS_ADDR` | Server 监听地址 | `0.0.0.0:8080` |
+| `PHARUS_DB` | SQLite 路径 | `pharus.db` |
+| `PHARUS_THEMES` | 主题根目录 | `themes` |
+| `PHARUS_SERVER` | Agent 连接地址 | — |
+| `PHARUS_TOKEN` | Agent 令牌 | — |
+| `PHARUS_INTERVAL` | 上报间隔（秒） | `3` |
+
+Agent 也支持 TOML 配置文件（`--config agent.toml`）：
+
+```toml
+server = "wss://example.com/ws/agent"
+token = "..."
+interval = 3
+```
+
+## Docker
+
+```bash
+docker compose up -d                    # server
+docker compose --profile agent up -d    # 同机跑 agent（可选）
+```
+
+`themes/` 与 `data/`（SQLite）通过卷持久化。
+
+## 主题开发
+
+主题是纯静态文件目录（HTML/CSS/JS），无构建步骤、无 CDN 依赖。Server 托管
+`themes/<current_theme>/` 作为站点根。数据通过 WebSocket `/api/stream` 获取
+（JSON 增量协议），兜底 REST `/api/status`。翻译文件在主题内的 `i18n/*.json`。
+参考内置 `server/themes/default/`。
+
+## 协议
+
+两端共享的消息结构定义在 `common/` crate，JSON over WebSocket：
+
+- `AgentMsg`：`auth` / `sys_info` / `metrics`
+- `ServerToAgentMsg`：`auth_ok` / `auth_fail`
+- `BrowserMsg`：`snapshot` / `metrics` / `status`
+
+## License
+
+MIT

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Pharus Agent 一键安装脚本
-# 用法:
+# Pharus Agent one-line installer
+# Usage:
 #   curl -fsSL .../install-agent.sh | sudo bash -s -- --server wss://mon.example.com/ws/agent --token <token>
 set -euo pipefail
 
@@ -14,7 +14,7 @@ TOKEN=""
 INTERVAL="3"
 
 usage() {
-  echo "用法: $0 --server <ws(s)://.../ws/agent> --token <token> [--interval 3]"
+  echo "Usage: $0 --server <ws(s)://.../ws/agent> --token <token> [--interval 3]"
   exit 1
 }
 
@@ -29,19 +29,20 @@ done
 [[ -z "$SERVER" || -z "$TOKEN" ]] && usage
 
 if [[ $EUID -ne 0 ]]; then
-  echo "请用 root 或 sudo 运行" >&2
+  echo "Please run as root or via sudo" >&2
   exit 1
 fi
 
-# 识别架构
+# Detect architecture
 case "$(uname -m)" in
   x86_64|amd64)   ARCH="x86_64" ;;
   aarch64|arm64)  ARCH="aarch64" ;;
-  *) echo "不支持的架构: $(uname -m)" >&2; exit 1 ;;
+  i386|i686)      ARCH="i686" ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 ASSET="pharus-agent-linux-${ARCH}.tar.gz"
 
-echo ">> 下载 pharus-agent (linux/${ARCH})"
+echo ">> Downloading pharus-agent (linux/${ARCH})"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -50,13 +51,13 @@ if command -v curl >/dev/null; then
 elif command -v wget >/dev/null; then
   wget -q "https://github.com/${REPO}/releases/latest/download/${ASSET}" -O "${TMP}/agent.tar.gz"
 else
-  echo "需要 curl 或 wget" >&2; exit 1
+  echo "curl or wget is required" >&2; exit 1
 fi
 
 tar -xzf "${TMP}/agent.tar.gz" -C "$TMP"
 install -m 0755 "${TMP}/pharus-agent" "$INSTALL_BIN"
 
-echo ">> 写入配置 ${CONFIG_DIR}/agent.toml"
+echo ">> Writing config ${CONFIG_DIR}/agent.toml"
 mkdir -p "$CONFIG_DIR"
 cat > "${CONFIG_DIR}/agent.toml" <<EOF
 server = "${SERVER}"
@@ -65,7 +66,7 @@ interval = ${INTERVAL}
 EOF
 chmod 600 "${CONFIG_DIR}/agent.toml"
 
-echo ">> 安装 systemd 服务"
+echo ">> Installing systemd service"
 cat > "/etc/systemd/system/${SERVICE}.service" <<EOF
 [Unit]
 Description=Pharus monitoring agent
@@ -90,5 +91,5 @@ systemctl daemon-reload
 systemctl enable --now "$SERVICE"
 
 echo ""
-echo "安装完成。查看状态:  systemctl status ${SERVICE}"
-echo "查看日志:            journalctl -u ${SERVICE} -f"
+echo "Done. Check status:  systemctl status ${SERVICE}"
+echo "View logs:           journalctl -u ${SERVICE} -f"

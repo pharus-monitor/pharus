@@ -2,6 +2,57 @@
 (function () {
   'use strict';
 
+  /* ---------- i18n ---------- */
+  var SUPPORTED = ['en', 'zh-CN', 'ja', 'ru'];
+  var i18n = {};
+
+  function detectLang() {
+    var candidates = navigator.languages && navigator.languages.length
+      ? navigator.languages
+      : [navigator.language || 'en'];
+    for (var i = 0; i < candidates.length; i++) {
+      var l = String(candidates[i]).toLowerCase();
+      if (l.indexOf('zh') === 0) return 'zh-CN';
+      if (l.indexOf('ja') === 0) return 'ja';
+      if (l.indexOf('ru') === 0) return 'ru';
+      if (l.indexOf('en') === 0) return 'en';
+    }
+    return 'en';
+  }
+
+  function loadLang(lang) {
+    return fetch('i18n/' + lang + '.json').then(function (r) {
+      if (!r.ok) throw new Error('lang ' + r.status);
+      return r.json();
+    });
+  }
+
+  function t(key) {
+    return Object.prototype.hasOwnProperty.call(i18n, key) ? i18n[key] : key;
+  }
+
+  function applyStatics() {
+    document.title = t('doc.title');
+    var nodes = document.querySelectorAll('[data-i18n]');
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].textContent = t(nodes[i].getAttribute('data-i18n'));
+    }
+    var aria = document.querySelectorAll('[data-i18n-aria]');
+    for (var j = 0; j < aria.length; j++) {
+      aria[j].setAttribute('aria-label', t(aria[j].getAttribute('data-i18n-aria')));
+    }
+    // template content is not matched by document.querySelectorAll
+    var tplNodes = tpl.content.querySelectorAll('[data-i18n]');
+    for (var k = 0; k < tplNodes.length; k++) {
+      tplNodes[k].textContent = t(tplNodes[k].getAttribute('data-i18n'));
+    }
+    var tplAria = tpl.content.querySelectorAll('[data-i18n-aria]');
+    for (var m = 0; m < tplAria.length; m++) {
+      tplAria[m].setAttribute('aria-label', t(tplAria[m].getAttribute('data-i18n-aria')));
+    }
+  }
+
+  /* ---------- DOM ---------- */
   var grid = document.getElementById('grid');
   var empty = document.getElementById('empty');
   var tpl = document.getElementById('card-tpl');
@@ -16,6 +67,7 @@
   var cards = new Map();
   var state = new Map();
 
+  /* ---------- formatting ---------- */
   function fmtBytes(b) {
     if (b == null) return '—';
     var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -77,7 +129,7 @@
     var dot = document.createElement('span');
     dot.className = 'dot';
     card.status.appendChild(dot);
-    card.status.appendChild(document.createTextNode(online ? '在线' : '离线'));
+    card.status.appendChild(document.createTextNode(online ? t('status.online') : t('status.offline')));
     card.status.classList.toggle('online', online);
     card.el.classList.toggle('is-online', online);
     card.el.classList.toggle('is-offline', !online);
@@ -120,11 +172,11 @@
   function connect() {
     var proto = location.protocol === 'https:' ? 'wss' : 'ws';
     var ws = new WebSocket(proto + '://' + location.host + '/api/stream');
-    setConn(false, '连接中…');
+    setConn(false, t('conn.connecting'));
 
-    ws.onopen = function () { setConn(true, '实时推送'); };
+    ws.onopen = function () { setConn(true, t('conn.live')); };
     ws.onclose = function () {
-      setConn(false, '已断开，重连中…');
+      setConn(false, t('conn.reconnecting'));
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { ws.close(); };
@@ -152,5 +204,14 @@
     };
   }
 
-  connect();
+  /* ---------- boot: language first, then live data ---------- */
+  var lang = detectLang();
+  loadLang(lang)
+    .catch(function () { return loadLang('en'); })
+    .catch(function () { return {}; })
+    .then(function (dict) {
+      i18n = dict || {};
+      applyStatics();
+      connect();
+    });
 })();

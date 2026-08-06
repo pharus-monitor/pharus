@@ -1,61 +1,62 @@
-# Pharus 部署教程
+# Pharus Deployment Guide
 
-本文档覆盖生产环境的完整部署流程：
+This document covers the full production deployment workflow.
+[中文版本](deployment.zh-CN.md)
 
-- [一、部署 Server](#一部署-server)
-  - [方式 A：单二进制 + systemd（推荐）](#方式-a单二进制--systemd推荐)
-  - [方式 B：Docker / docker-compose](#方式-bdocker--docker-compose)
-  - [配置 HTTPS 反向代理（Caddy / Nginx）](#配置-https-反向代理)
-- [二、部署 Agent（被监控机）](#二部署-agent被监控机)
-  - [方式 A：一键脚本](#方式-a一键脚本)
-  - [方式 B：手动安装 + systemd](#方式-b手动安装--systemd)
-  - [方式 C：Docker](#方式-cdocker)
-  - [Windows 被监控机](#windows-被监控机)
-- [三、验证与排错](#三验证与排错)
-- [四、升级与备份](#四升级与备份)
-- [五、安全建议](#五安全建议)
+- [1. Deploy the Server](#1-deploy-the-server)
+  - [Option A: single binary + systemd (recommended)](#option-a-single-binary--systemd-recommended)
+  - [Option B: Docker / docker-compose](#option-b-docker--docker-compose)
+  - [HTTPS reverse proxy (Caddy / Nginx)](#https-reverse-proxy-caddy--nginx)
+- [2. Deploy the Agent (monitored machines)](#2-deploy-the-agent-monitored-machines)
+  - [Option A: one-line installer](#option-a-one-line-installer)
+  - [Option B: manual install + systemd](#option-b-manual-install--systemd)
+  - [Option C: Docker](#option-c-docker)
+  - [Windows machines](#windows-machines)
+- [3. Verification & Troubleshooting](#3-verification--troubleshooting)
+- [4. Upgrade & Backup](#4-upgrade--backup)
+- [5. Security Hardening](#5-security-hardening)
 
 ---
 
-## 一、部署 Server
+## 1. Deploy the Server
 
-### 方式 A：单二进制 + systemd（推荐）
+### Option A: single binary + systemd (recommended)
 
-**1. 获取二进制**
+**1. Get the binary**
 
-从 [Releases](https://github.com/pharus-monitor/pharus/releases) 下载对应架构，或自行交叉编译：
+Download the matching architecture from [Releases](https://github.com/pharus-monitor/pharus/releases) (`linux-x86_64`, `linux-i686`, `linux-aarch64`), or cross-compile it yourself:
 
 ```bash
-# 在开发机上交叉编译 Linux x86_64 静态包（musl）
+# Cross-compile a static Linux x86_64 build (musl)
 rustup target add x86_64-unknown-linux-musl
 cargo build --release -p pharus --target x86_64-unknown-linux-musl
-# 产物：target/x86_64-unknown-linux-musl/release/pharus
+# Output: target/x86_64-unknown-linux-musl/release/pharus
 ```
 
-**2. 安装到服务器**
+**2. Install on the server**
 
 ```bash
-# 创建用户与目录
+# Create user and directories
 sudo useradd -r -s /usr/sbin/nologin pharus || true
 sudo mkdir -p /etc/pharus /var/lib/pharus
 sudo cp pharus /usr/local/bin/pharus
 sudo chmod +x /usr/local/bin/pharus
 
-# 拷贝主题目录（前端静态文件）
-sudo cp -r server/themes /var/lib/pharus/themes
+# Copy the theme directory (frontend static files)
+sudo cp -r themes /var/lib/pharus/themes
 
-# 授权
+# Permissions
 sudo chown -R pharus:pharus /var/lib/pharus
 ```
 
-**3. 创建第一个 Agent（拿到 token，后面装 Agent 要用）**
+**3. Create the first agent (you need the token when installing agents)**
 
 ```bash
 sudo -u pharus pharus add-agent --name my-first-vps --db /var/lib/pharus/pharus.db
-# 输出 token = xxxxxxxx...  ← 记下来
+# prints: token = xxxxxxxx...   <- save this
 ```
 
-**4. 配置 systemd**
+**4. Configure systemd**
 
 ```bash
 sudo cp deploy/pharus-server.service /etc/systemd/system/
@@ -64,9 +65,9 @@ sudo systemctl enable --now pharus-server
 systemctl status pharus-server
 ```
 
-服务默认监听 `0.0.0.0:8080`。改端口可编辑 unit 文件中的 `PHARUS_ADDR`。
+The service listens on `0.0.0.0:8080` by default. Edit `PHARUS_ADDR` in the unit file to change the port.
 
-**5. 防火墙放行**
+**5. Open the firewall**
 
 ```bash
 # UFW
@@ -75,41 +76,41 @@ sudo ufw allow 8080/tcp
 sudo firewall-cmd --permanent --add-port=8080/tcp && sudo firewall-cmd --reload
 ```
 
-> 若使用 HTTPS 反向代理（见下），则**无需**对外放行 8080，让 unit 只监听
-> `127.0.0.1:8080` 即可。
+> If you use an HTTPS reverse proxy (see below), you do **not** need to expose 8080
+> publicly — bind the unit to `127.0.0.1:8080` instead.
 
-### 方式 B：Docker / docker-compose
+### Option B: Docker / docker-compose
 
 ```bash
 git clone https://github.com/pharus-monitor/pharus.git
 cd pharus
 
-# 启动 Server
+# Start the server
 docker compose up -d
 
-# 注册 Agent（在容器内执行，token 会打印出来）
+# Register an agent (runs inside the container, token is printed)
 docker compose exec server pharus add-agent --name my-first-vps --db /app/data/pharus.db
 ```
 
-数据与主题通过卷持久化：
+Data and themes are persisted via volumes:
 
-| 卷 | 内容 |
+| Volume | Contents |
 |---|---|
-| `pharus-data` → `/app/data` | SQLite 数据库 |
-| `./server/themes` → `/app/themes` | 主题目录（新增主题放进去即可） |
+| `pharus-data` → `/app/data` | SQLite database |
+| `./server/themes` → `/app/themes` | Theme directory (drop new themes here) |
 
-升级：
+Upgrading:
 
 ```bash
 git pull
 docker compose up -d --build
 ```
 
-### 配置 HTTPS 反向代理
+### HTTPS reverse proxy (Caddy / Nginx)
 
-生产环境强烈建议套一层 TLS。WebSocket 在 HTTPS 下自动升级为 wss。
+A TLS layer is strongly recommended in production. WebSocket automatically upgrades to `wss` under HTTPS.
 
-**Caddy（最省事，自动签发证书）**
+**Caddy (easiest, automatic certificates)**
 
 ```caddyfile
 mon.example.com {
@@ -129,18 +130,18 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:8080;
-        # WebSocket 必需的升级头
+        # Headers required for WebSocket
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 3600s;   # 长连接保活
+        proxy_read_timeout 3600s;   # keep long-lived connections alive
     }
 }
 ```
 
-使用反代后，Agent 连接地址写 wss：
+With a reverse proxy in place, agents connect via `wss`:
 
 ```
 wss://mon.example.com/ws/agent
@@ -148,139 +149,141 @@ wss://mon.example.com/ws/agent
 
 ---
 
-## 二、部署 Agent（被监控机）
+## 2. Deploy the Agent (monitored machines)
 
-前置条件：已经在 Server 上 `add-agent` 拿到 **token**。
+Prerequisite: you have already run `add-agent` on the server and have a **token**.
 
-### 方式 A：一键脚本
+### Option A: one-line installer
 
-在**被监控机**上执行（Linux x86_64 / ARM64）：
+Run on the **monitored machine** (Linux x86_64 / i686 / ARM64):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pharus-monitor/pharus/main/scripts/install-agent.sh | sudo bash -s -- \
   --server wss://mon.example.com/ws/agent \
-  --token <你的token>
+  --token <your-token>
 ```
 
-脚本会自动：下载对应架构的 `pharus-agent` → 写入 `/etc/pharus/agent.toml` →
-安装并启动 systemd 服务。
+The script automatically: downloads the matching `pharus-agent` build → writes
+`/etc/pharus/agent.toml` → installs and starts the systemd service.
 
-### 方式 B：手动安装 + systemd
+### Option B: manual install + systemd
 
 ```bash
-# 1. 放置二进制
+# 1. Install the binary
 sudo cp pharus-agent /usr/local/bin/pharus-agent
 sudo chmod +x /usr/local/bin/pharus-agent
 
-# 2. 写配置
+# 2. Configuration
 sudo mkdir -p /etc/pharus
 sudo tee /etc/pharus/agent.toml > /dev/null <<EOF
 server = "wss://mon.example.com/ws/agent"
-token = "<你的token>"
+token = "<your-token>"
 interval = 3
 EOF
-sudo chmod 600 /etc/pharus/agent.toml   # token 仅 root 可读
+sudo chmod 600 /etc/pharus/agent.toml   # token readable by root only
 
 # 3. systemd
 sudo cp deploy/pharus-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pharus-agent
 
-# 4. 查看日志确认已连上
+# 4. Check the logs to confirm it connected
 journalctl -u pharus-agent -f
-# 应看到：authenticated  agent_id=1
+# You should see: authenticated  agent_id=1
 ```
 
-> Agent 无需任何入站端口，只要能**出站**访问 Server 即可（穿透 NAT / 家宽友好）。
+> The agent needs **no inbound ports** — it only makes outbound connections to the
+> server (NAT / home-connection friendly).
 
-### 方式 C：Docker
+### Option C: Docker
 
 ```bash
 docker run -d --name pharus-agent --restart unless-stopped \
   -e PHARUS_SERVER=wss://mon.example.com/ws/agent \
-  -e PHARUS_TOKEN=<你的token> \
+  -e PHARUS_TOKEN=<your-token> \
   ghcr.io/pharus-monitor/pharus-agent:latest
 ```
 
-> 容器内采集的是容器的指标。要监控**宿主机**，请用二进制方式部署；
-> 或给容器挂载宿主机 `/proc`、`/sys`（只读）——后续版本会提供示例。
+> A containerized agent reports the container's metrics. To monitor the **host**,
+> install the binary instead, or mount the host's `/proc` and `/sys` read-only —
+> a future release will ship a ready-made example.
 
-### Windows 被监控机
+### Windows machines
 
-1. 下载 `pharus-agent-windows-x86_64.exe`
-2. 直接用参数运行：
+1. Download `pharus-agent-windows-x86_64.exe`
+2. Run it directly with arguments:
 
 ```powershell
 .\pharus-agent.exe --server wss://mon.example.com/ws/agent --token <token>
 ```
 
-3. 注册为开机自启服务（任选其一）：
+3. Register it as an auto-start service (either option):
 
 ```powershell
-# 用 NSSM（推荐）
+# Using NSSM (recommended)
 nssm install pharus-agent "C:\pharus\pharus-agent.exe" "--server wss://mon.example.com/ws/agent --token <token>"
 nssm start pharus-agent
 
-# 或任务计划程序（开机触发）
+# Or Task Scheduler (runs at boot)
 schtasks /create /tn "PharusAgent" /sc onstart /ru SYSTEM ^
   /tr "C:\pharus\pharus-agent.exe --server wss://mon.example.com/ws/agent --token <token>"
 ```
 
 ---
 
-## 三、验证与排错
+## 3. Verification & Troubleshooting
 
-**验证闭环**
+**End-to-end check**
 
 ```bash
-# Server 上：应返回 JSON，online: true
+# On the server: should return JSON with online: true
 curl http://127.0.0.1:8080/api/status
 
-# Agent 上：日志应有 authenticated
+# On the agent: logs should show "authenticated"
 journalctl -u pharus-agent -n 20
 ```
 
-浏览器打开面板地址，主机卡片应在 3 秒内亮起。
+Open the dashboard in a browser — the host card should light up within 3 seconds.
 
-**常见问题**
+**Common issues**
 
-| 现象 | 排查 |
+| Symptom | What to check |
 |---|---|
-| Agent 报 `auth failed: invalid token` | token 复制错 / 在错的 Server 上注册的 |
-| Agent 一直 reconnecting | Server 地址是否可达：`curl -i <addr>/api/status`；反代是否配了 WS 升级头 |
-| 面板显示在线但无数据 | 浏览器开 DevTools 看 `/api/stream` 是否 101 升级成功 |
-| 反代后面板白屏/断开 | Nginx 缺 `Upgrade`/`Connection` 头，或 `proxy_read_timeout` 太短 |
-| 数据不写入历史 | 历史每 60s 写一行，等一分钟再查 `pharus.db` 的 `metrics_history` 表 |
+| Agent logs `auth failed: invalid token` | Token copied incorrectly, or registered on the wrong server |
+| Agent stuck in `reconnecting` | Is the server reachable: `curl -i <addr>/api/status`; did the reverse proxy forward the WS upgrade headers |
+| Dashboard shows online but no data | Open DevTools and check whether `/api/stream` upgrades with a 101 |
+| Blank/disconnecting dashboard behind a proxy | Nginx missing `Upgrade`/`Connection` headers, or `proxy_read_timeout` too short |
+| No history being written | History is written once per 60s — wait a minute, then check the `metrics_history` table in `pharus.db` |
 
-日志级别：两端都读 `RUST_LOG` 环境变量，如 `RUST_LOG=debug`。
+Log level: both binaries honor the `RUST_LOG` environment variable, e.g. `RUST_LOG=debug`.
 
 ---
 
-## 四、升级与备份
+## 4. Upgrade & Backup
 
-**升级**
+**Upgrade**
 
-- 二进制方式：替换 `/usr/local/bin/pharus(-agent)` 后 `systemctl restart`
-- Docker：`git pull && docker compose up -d --build`
-- 协议字段向后兼容；两端版本不必强一致，但建议同步升级
+- Binary installs: replace `/usr/local/bin/pharus(-agent)` and `systemctl restart`
+- Docker: `git pull && docker compose up -d --build`
+- Protocol fields are backward-compatible; versions do not need to match exactly, but upgrading both sides together is recommended
 
-**备份**
+**Backup**
 
-只需备份一个文件（WAL 模式下建议先停机或用 `.backup`）：
+Only one file needs backing up (in WAL mode, stop the service first or use `.backup`):
 
 ```bash
-# 在线备份（安全）
+# Safe online backup
 sqlite3 /var/lib/pharus/pharus.db ".backup /backup/pharus-$(date +%F).db"
 ```
 
-主题目录 `themes/` 如有自定义主题也一并备份。
+Also back up the `themes/` directory if you have custom themes.
 
 ---
 
-## 五、安全建议
+## 5. Security Hardening
 
-1. **永远走 wss**：公网部署务必套 TLS，token 明文走 ws 会被嗅探
-2. **token 即凭据**：每台机器一个独立 token，泄露后删掉该行重建即可
-3. **最小权限**：两端均以非 root 用户运行（unit 文件已配置 `User=pharus`）
-4. **收窄监听**：有反代时 Server 只监听 `127.0.0.1:8080`
-5. **数据库文件权限**：`chmod 600 pharus.db`，内含所有 agent token
+1. **Always use wss**: put TLS in front of any public deployment — tokens sent over plain `ws` can be sniffed
+2. **Tokens are credentials**: use one token per machine; if one leaks, delete that row and re-register
+3. **Least privilege**: run both sides as a non-root user (the unit files already set `User=pharus`)
+4. **Tighten the bind address**: with a reverse proxy, the server should only listen on `127.0.0.1:8080`
+5. **Database file permissions**: `chmod 600 pharus.db` — it contains every agent token

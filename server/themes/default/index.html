@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pharus · 服务器监控</title>
+  <title data-i18n="doc.title">Pharus · Server Monitoring</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
@@ -30,11 +30,11 @@
       </div>
       <div class="brand">
         <h1>Pharus</h1>
-        <p>灯塔 · 轻量服务器监控</p>
+        <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
       </div>
       <div class="header-right">
         <span id="conn" class="conn-badge conn-down" role="status">
-          <span class="conn-dot"></span>连接中…
+          <span class="conn-dot"></span>Connecting…
         </span>
       </div>
     </div>
@@ -44,19 +44,19 @@
 
     <section class="stats" aria-label="总览">
       <div class="stat-tile">
-        <p class="stat-label">主机总数</p>
+        <p class="stat-label" data-i18n="stats.total">Servers</p>
         <p class="stat-value" id="stat-total">0</p>
       </div>
       <div class="stat-tile">
-        <p class="stat-label">在线</p>
+        <p class="stat-label" data-i18n="stats.online">Online</p>
         <p class="stat-value stat-online" id="stat-online">0</p>
       </div>
       <div class="stat-tile">
-        <p class="stat-label">离线</p>
+        <p class="stat-label" data-i18n="stats.offline">Offline</p>
         <p class="stat-value stat-offline" id="stat-offline">0</p>
       </div>
       <div class="stat-tile">
-        <p class="stat-label">平均 CPU</p>
+        <p class="stat-label" data-i18n="stats.avgCpu">Avg CPU</p>
         <p class="stat-value stat-cpu" id="stat-cpu">—</p>
       </div>
     </section>
@@ -64,8 +64,12 @@
     <section id="grid" class="grid" aria-live="polite"></section>
 
     <div id="empty" class="empty" hidden>
-      <p class="empty-title">暂无主机</p>
-      <p class="empty-hint">使用 <code>pharus add-agent --name &lt;名称&gt;</code> 注册第一台服务器</p>
+      <p class="empty-title" data-i18n="empty.title">No servers yet</p>
+      <p class="empty-hint">
+        <span data-i18n="empty.hintBefore">Run</span>
+        <code>pharus add-agent --name &lt;name&gt;</code>
+        <span data-i18n="empty.hintAfter">to register your first server</span>
+      </p>
     </div>
   </main>
 
@@ -76,11 +80,11 @@
           <h2 data-f="name">—</h2>
           <p data-f="os">—</p>
         </div>
-        <span class="status-pill" data-f="status"><span class="dot"></span>离线</span>
+        <span class="status-pill" data-f="status"><span class="dot"></span>Offline</span>
       </div>
 
       <div class="card-body">
-        <div class="gauge" role="img" aria-label="CPU 使用率">
+        <div class="gauge" role="img" data-i18n-aria="gauge.aria" aria-label="CPU usage">
           <svg viewBox="0 0 96 96" class="gauge-svg">
             <defs>
               <linearGradient id="cpuGrad" x1="0" y1="0" x2="1" y2="1">
@@ -95,21 +99,21 @@
           </svg>
           <div class="gauge-center">
             <span class="gauge-value" data-f="cpuVal">—</span>
-            <span class="gauge-label">CPU</span>
+            <span class="gauge-label" data-i18n="gauge.cpu">CPU</span>
           </div>
         </div>
 
         <div class="meters">
           <div class="meter">
             <div class="meter-head">
-              <span class="meter-label">内存</span>
+              <span class="meter-label" data-i18n="meter.mem">Memory</span>
               <span class="meter-value" data-f="memVal">—</span>
             </div>
             <div class="meter-track"><div class="meter-fill mem" data-f="memFill"></div></div>
           </div>
           <div class="meter">
             <div class="meter-head">
-              <span class="meter-label">磁盘</span>
+              <span class="meter-label" data-i18n="meter.disk">Disk</span>
               <span class="meter-value" data-f="diskVal">—</span>
             </div>
             <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
@@ -123,19 +127,19 @@
         <div class="kv">
           <span class="k">
             <svg viewBox="0 0 16 16" class="ico ico-down"><path d="M8 12.5 2.5 7h3V2h5v5h3z" fill="currentColor"/></svg>
-            下载
+            <span data-i18n="kv.download">Download</span>
           </span>
           <span class="v" data-f="rx">—</span>
         </div>
         <div class="kv">
           <span class="k">
             <svg viewBox="0 0 16 16" class="ico ico-up"><path d="M8 3.5 13.5 9h-3v5h-5V9h-3z" fill="currentColor"/></svg>
-            上传
+            <span data-i18n="kv.upload">Upload</span>
           </span>
           <span class="v" data-f="tx">—</span>
         </div>
-        <div class="kv"><span class="k">负载</span><span class="v" data-f="load">—</span></div>
-        <div class="kv"><span class="k">在线时长</span><span class="v" data-f="uptime">—</span></div>
+        <div class="kv"><span class="k" data-i18n="kv.load">Load</span><span class="v" data-f="load">—</span></div>
+        <div class="kv"><span class="k" data-i18n="kv.uptime">Uptime</span><span class="v" data-f="uptime">—</span></div>
       </div>
     </article>
   </template>

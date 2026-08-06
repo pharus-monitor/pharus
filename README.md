@@ -1,61 +1,70 @@
-# Pharus · 灯塔
+# Pharus · Lighthouse
 
-> **Pharus**（古希腊语 *pharos*，灯塔）—— 用 Rust 编写的轻量级服务器监控系统。
-> 每台被监控机如海上一个点，Pharus 是那座持续守望的灯塔。
+> **Pharus** (from Greek *pharos*, lighthouse) — a lightweight server monitoring
+> system written in Rust. Every monitored machine is a point at sea; Pharus is
+> the lighthouse that keeps watch and tells you who is online and how they are doing.
 
-对标 ServerStatus / 哪吒 / Beszel / Komari，追求更小的资源占用与内存安全。
+An alternative to ServerStatus / Nezha / Beszel / Komari, aiming for smaller
+resource footprint and memory safety.
 
-## 特性（MVP）
+[简体中文](README.zh-CN.md)
 
-- **Rust 全栈**：Agent 常驻内存 1–3MB 级别，无 GC 停顿
-- **单二进制**：无运行时依赖，交叉编译部署到各种 VPS
-- **实时推送**：WebSocket 双端推送，前端免轮询
-- **SQLite 存储**：单文件零运维，60s 降采样历史
-- **主题系统**：前端整模板可替换，`themes/` 加载 + `current_theme` 切换
-- **断线重连**：指数退避 1s 到 30s 封顶；15s 无上报判定离线
+## Features (MVP)
 
-路线图（二期/进阶）：Ping/TCPing 动态监控、自定义任务、Looking Glass / MTR / iperf3、
-告警通知、流媒体解锁检测、主题商店等，详见设计大纲。
+- **Full Rust stack**: agent idles at 1–3 MB RSS, no GC pauses
+- **Single binary**: zero runtime dependencies, statically linked (musl) for any VPS
+- **Real-time push**: WebSocket both ways, no browser polling
+- **SQLite storage**: single-file, zero-ops, 60s downsampled history
+- **Theme system**: the whole frontend is a swappable template (`themes/` + `current_theme`)
+- **Multilingual UI**: English / 中文 / 日本語 / Русский, auto-matched to browser language
+- **Reconnect & offline detection**: exponential backoff 1s→30s; offline after 15s silence
 
-## 架构
+Roadmap (phase 2+): Ping/TCPing monitoring, custom script tasks, Looking Glass /
+MTR / iperf3, alert notifications, streaming-unlock checks, theme store.
 
-Agent 主动出站连 Server（NAT 友好），单连接双向复用；Server 内存保存实时状态，
-每 60s 降采样写入 SQLite，并经 `/api/stream` 把增量推给浏览器。
+## Architecture
 
-## 快速开始
+The agent dials **out** to the server (NAT-friendly) over a single duplex WebSocket.
+The server keeps live state in memory, writes downsampled history to SQLite every
+60s, and pushes increments to browsers via `/api/stream`.
+
+## Quick Start
+
+Download prebuilt static binaries (x86_64 / i686 / aarch64) from
+[Releases](https://github.com/pharus-monitor/pharus/releases), or build from source:
 
 ```bash
 cargo build --release
 
-# 1. 注册一台被监控机，得到 token
+# 1. Register a monitored machine, get a token
 ./pharus add-agent --name my-vps
 
-# 2. 启动 Server（默认 0.0.0.0:8080）
+# 2. Start the server (default 0.0.0.0:8080)
 ./pharus serve --themes server/themes
 
-# 3. 在被监控机上启动 Agent
+# 3. Start the agent on the monitored machine
 ./pharus-agent --server ws://<server>:8080/ws/agent --token <token>
 ```
 
-打开 `http://<server>:8080` 即可看到实时面板。
+Open `http://<server>:8080` to see the live dashboard.
 
-> 生产环境完整部署（systemd、Docker、HTTPS 反代、Windows 被控端、排错）：
-> **[docs/deployment.md](docs/deployment.md)**
+> Full production deployment (systemd, Docker, HTTPS reverse proxy, Windows
+> agents, troubleshooting): **[docs/deployment.md](docs/deployment.md)**
 
-### 配置
+### Configuration
 
-Server 与 Agent 均支持命令行参数与环境变量：
+Both binaries accept CLI flags and environment variables:
 
-| 环境变量 | 说明 | 默认 |
+| Variable | Description | Default |
 |---|---|---|
-| `PHARUS_ADDR` | Server 监听地址 | `0.0.0.0:8080` |
-| `PHARUS_DB` | SQLite 路径 | `pharus.db` |
-| `PHARUS_THEMES` | 主题根目录 | `themes` |
-| `PHARUS_SERVER` | Agent 连接地址 | — |
-| `PHARUS_TOKEN` | Agent 令牌 | — |
-| `PHARUS_INTERVAL` | 上报间隔（秒） | `3` |
+| `PHARUS_ADDR` | Server listen address | `0.0.0.0:8080` |
+| `PHARUS_DB` | SQLite path | `pharus.db` |
+| `PHARUS_THEMES` | Themes root directory | `themes` |
+| `PHARUS_SERVER` | Agent server URL | — |
+| `PHARUS_TOKEN` | Agent token | — |
+| `PHARUS_INTERVAL` | Report interval (seconds) | `3` |
 
-Agent 也支持 TOML 配置文件（`--config agent.toml`）：
+The agent also supports a TOML config file (`--config agent.toml`):
 
 ```toml
 server = "wss://example.com/ws/agent"
@@ -67,24 +76,26 @@ interval = 3
 
 ```bash
 docker compose up -d                    # server
-docker compose --profile agent up -d    # 同机跑 agent（可选）
+docker compose --profile agent up -d    # optional same-host agent
 ```
 
-`themes/` 与 `data/`（SQLite）通过卷持久化。
+`themes/` and the SQLite `data/` directory are persisted via volumes.
 
-## 主题开发
+## Theme Development
 
-主题是纯静态文件目录（HTML/CSS/JS），无构建依赖。Server 托管 `themes/<current_theme>/`
-作为站点根。数据通过 WebSocket `/api/stream` 获取（JSON 增量协议），兜底 REST `/api/status`。
-参考内置 `server/themes/default/`。
+A theme is a plain static directory (HTML/CSS/JS) with **no build step and no CDN
+dependency**. The server hosts `themes/<current_theme>/` as the site root. Data
+comes from the WebSocket `/api/stream` (JSON delta protocol), with REST
+`/api/status` as a fallback. Translations live in `i18n/*.json` inside the theme.
+See the bundled `server/themes/default/`.
 
-## 协议
+## Protocol
 
-两端共享的消息结构定义在 `common/` crate，JSON over WebSocket：
+Shared message types live in the `common/` crate, JSON over WebSocket:
 
-- `AgentMsg`：`auth` / `sys_info` / `metrics`
-- `ServerToAgentMsg`：`auth_ok` / `auth_fail`
-- `BrowserMsg`：`snapshot` / `metrics` / `status`
+- `AgentMsg`: `auth` / `sys_info` / `metrics`
+- `ServerToAgentMsg`: `auth_ok` / `auth_fail`
+- `BrowserMsg`: `snapshot` / `metrics` / `status`
 
 ## License
 
