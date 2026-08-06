@@ -176,26 +176,27 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                let (rows, traffic_rows): (Vec<(i64, pharus_common::Metrics)>, Vec<(i64, db::TrafficRow)>) = {
+                let (rows, traffic_rows) = {
                     let agents = state.agents.read().unwrap();
-                    (
-                        agents
-                            .iter()
-                            .filter(|(_, a)| a.online)
-                            .filter_map(|(id, a)| a.data.clone().map(|d| (*id, d)))
-                            .collect(),
-                        agents
-                            .iter()
-                            .filter(|(_, a)| a.traffic.last_rx_total.is_some())
-                            .map(|(id, a)| (*id, db::TrafficRow {
+                    let rows: Vec<(i64, pharus_common::Metrics)> = agents
+                        .iter()
+                        .filter(|(_, a)| a.online)
+                        .filter_map(|(id, a)| a.data.clone().map(|d| (*id, d)))
+                        .collect();
+                    let traffic_rows: Vec<(i64, db::TrafficRow)> = agents
+                        .iter()
+                        .filter(|(_, a)| a.traffic.last_rx_total.is_some())
+                        .map(|(id, a)| {
+                            (*id, db::TrafficRow {
                                 cycle_start: a.traffic.cycle_start,
                                 rx_bytes: a.traffic.rx_bytes,
                                 tx_bytes: a.traffic.tx_bytes,
                                 last_rx_total: a.traffic.last_rx_total,
                                 last_tx_total: a.traffic.last_tx_total,
-                            }))
-                            .collect(),
-                    )
+                            })
+                        })
+                        .collect();
+                    (rows, traffic_rows)
                 };
                 let db = state.db.lock().unwrap();
                 for (id, t) in &traffic_rows {
