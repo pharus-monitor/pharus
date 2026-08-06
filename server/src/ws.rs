@@ -129,6 +129,9 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                 {
                     let mut agents = state.agents.write().unwrap();
                     if let Some(a) = agents.get_mut(&agent_id) {
+                        let default_billing = pharus_common::BillingInfo::default();
+                        let b = a.billing.as_ref().unwrap_or(&default_billing);
+                        crate::billing::apply_metrics(&mut a.traffic, b, &data, chrono::Local::now());
                         a.data = Some(data.clone());
                     }
                 }
@@ -168,16 +171,7 @@ pub async fn handle_browser_socket(state: SharedState, socket: WebSocket) {
 
     let snapshot = {
         let agents = state.agents.read().unwrap();
-        let list: Vec<AgentSnapshot> = agents
-            .iter()
-            .map(|(id, a)| AgentSnapshot {
-                agent_id: *id,
-                name: a.name.clone(),
-                online: a.online,
-                info: a.info.clone(),
-                data: a.data.clone(),
-            })
-            .collect();
+        let list: Vec<AgentSnapshot> = agents.iter().map(|(id, a)| a.snapshot(*id)).collect();
         BrowserMsg::Snapshot { agents: list }
     };
     if write

@@ -1,3 +1,5 @@
+mod admin;
+mod billing;
 mod db;
 mod state;
 mod ws;
@@ -41,6 +43,9 @@ enum Command {
         /// Themes root directory
         #[arg(long, env = "PHARUS_THEMES", default_value = "themes")]
         themes: PathBuf,
+        /// Admin token for the billing management API (disabled if unset)
+        #[arg(long, env = "PHARUS_ADMIN_TOKEN")]
+        admin_token: Option<String>,
     },
     /// Register an agent and print its token
     AddAgent {
@@ -68,16 +73,7 @@ async fn browser_ws(State(state): State<SharedState>, ws: WebSocketUpgrade) -> a
 
 async fn status_json(State(state): State<SharedState>) -> Json<Vec<AgentSnapshot>> {
     let agents = state.agents.read().unwrap();
-    let list = agents
-        .iter()
-        .map(|(id, a)| AgentSnapshot {
-            agent_id: *id,
-            name: a.name.clone(),
-            online: a.online,
-            info: a.info.clone(),
-            data: a.data.clone(),
-        })
-        .collect();
+    let list = agents.iter().map(|(id, a)| a.snapshot(*id)).collect();
     Json(list)
 }
 
@@ -128,21 +124,35 @@ async fn main() -> Result<()> {
             println!("current_theme = {name}");
             Ok(())
         }
-        Command::Serve { addr, db, themes } => serve(addr, db, themes).await,
+        Command::Serve { addr, db, themes, admin_token } => serve(addr, db, themes, admin_token).await,
     }
 }
 
-async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf) -> Result<()> {
+async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token: Option<String>) -> Result<()> {
     let conn = rusqlite::Connection::open(&db_path)
         .with_context(|| format!("open db {}", db_path.display()))?;
     db::init(&conn)?;
 
+    let billing_map = db::list_billing(&conn)?;
+    let traffic_map = db::load_traffic(&conn)?;
     let mut agents = HashMap::new();
     for (id, name) in db::list_agents(&conn)? {
+        let traffic = traffic_map
+            .get(&id)
+            .map(|r| state::TrafficState {
+                cycle_start: r.cycle_start,
+                rx_bytes: r.rx_bytes,
+                tx_bytes: r.tx_bytes,
+                last_rx_total: r.last_rx_total,
+                last_tx_total: r.last_tx_total,
+            })
+            .unwrap_or_default();
         agents.insert(
             id,
             AgentState {
                 name,
+                billing: billing_map.get(&id).cloned(),
+                traffic,
                 ..AgentState::default()
             },
         );
@@ -155,6 +165,7 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf) -> Result<(
         db: Mutex::new(conn),
         browser_tx,
         themes_root: themes_root.clone(),
+        admin_token,
     });
 
     {
@@ -164,15 +175,33 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf) -> Result<(
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                let rows: Vec<(i64, pharus_common::Metrics)> = {
+                let (rows, traffic_rows): (Vec<(i64, pharus_common::Metrics)>, Vec<(i64, db::TrafficRow)>) = {
                     let agents = state.agents.read().unwrap();
-                    agents
-                        .iter()
-                        .filter(|(_, a)| a.online)
-                        .filter_map(|(id, a)| a.data.clone().map(|d| (*id, d)))
-                        .collect()
+                    (
+                        agents
+                            .iter()
+                            .filter(|(_, a)| a.online)
+                            .filter_map(|(id, a)| a.data.clone().map(|d| (*id, d)))
+                            .collect(),
+                        agents
+                            .iter()
+                            .filter(|(_, a)| a.traffic.last_rx_total.is_some())
+                            .map(|(id, a)| (*id, db::TrafficRow {
+                                cycle_start: a.traffic.cycle_start,
+                                rx_bytes: a.traffic.rx_bytes,
+                                tx_bytes: a.traffic.tx_bytes,
+                                last_rx_total: a.traffic.last_rx_total,
+                                last_tx_total: a.traffic.last_tx_total,
+                            }))
+                            .collect(),
+                    )
                 };
                 let db = state.db.lock().unwrap();
+                for (id, t) in &traffic_rows {
+                    if let Err(e) = db::upsert_traffic(&db, *id, t) {
+                        tracing::warn!(agent_id = id, error = %e, "traffic flush failed");
+                    }
+                }
                 for (id, m) in rows {
                     if let Err(e) = db::insert_metrics(&db, id, &m) {
                         tracing::warn!(agent_id = id, error = %e, "history insert failed");
@@ -186,6 +215,7 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf) -> Result<(
         .route("/ws/agent", get(agent_ws))
         .route("/api/stream", get(browser_ws))
         .route("/api/status", get(status_json))
+        .merge(admin::router(state.clone()))
         .fallback(themed_static)
         .with_state(state);
 

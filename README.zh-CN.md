@@ -71,6 +71,7 @@ Server 与 Agent 均支持命令行参数与环境变量：
 | `PHARUS_SERVER` | Agent 连接地址 | — |
 | `PHARUS_TOKEN` | Agent 令牌 | — |
 | `PHARUS_INTERVAL` | 上报间隔（秒） | `3` |
+| `PHARUS_ADMIN_TOKEN` | 账单管理 API 的 Token（不设置则关闭） | — |
 
 Agent 也支持 TOML 配置文件（`--config agent.toml`）：
 
@@ -101,6 +102,22 @@ docker compose --profile agent up -d    # 同机跑 agent（可选）
 ```bash
 ./pharus set-theme --name <theme>
 ```
+
+## 账单与流量
+
+面板支持按机器记录账单信息：计费周期流量（可设每月重置日）、流量配额
+（用量进度条，>80% 变黄、>95% 变红）、到期时间（倒计时，≤7 天变红）、
+续费价格（人民币/美元/欧元，月付/季付/年付）。头部概览按币种汇总月成本。
+
+流量由 agent 上报的开机累计字节数差值统计，agent 重启不丢用量。
+周期重置边界与到期日均按 **server 本地时区** 解释。v0.0.x 旧版 agent
+不上报计数器，仅无流量数据，其余功能不受影响。
+
+在 server 上设置 `PHARUS_ADMIN_TOKEN` 后，点击面板右上角的齿轮图标即可
+进入管理模式编辑每台机器。未设置时管理 API 返回 404，面板保持只读。
+
+> 账单信息在公开面板上可见（与其他数据一致）。价格敏感时请将整站置于
+> 带鉴权的反向代理之后。
 
 ## 协议
 

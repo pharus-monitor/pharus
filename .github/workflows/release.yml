@@ -15,7 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --workspace --locked
+        with:
+          components: clippy
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   build:
     if: startsWith(github.ref, 'refs/tags/v')

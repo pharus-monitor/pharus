@@ -74,6 +74,7 @@ Both binaries accept CLI flags and environment variables:
 | `PHARUS_SERVER` | Agent server URL | — |
 | `PHARUS_TOKEN` | Agent token | — |
 | `PHARUS_INTERVAL` | Report interval (seconds) | `3` |
+| `PHARUS_ADMIN_TOKEN` | Admin API token for billing management (disabled if unset) | — |
 
 The agent also supports a TOML config file (`--config agent.toml`):
 
@@ -105,6 +106,26 @@ Switch themes at runtime — no restart needed:
 ```bash
 ./pharus set-theme --name <theme>
 ```
+
+## Billing & Traffic
+
+The dashboard tracks per-agent billing details: cycle traffic with a monthly
+reset day, an optional traffic quota with a usage bar (amber >80%, red >95%),
+an expiry date with countdown (red ≤7 days), and a renewal price
+(CNY/USD/EUR · monthly/quarterly/yearly). The header shows a monthly cost
+summary grouped by currency.
+
+Traffic is counted from cumulative byte counters reported by the agent, so
+agent reboots don't lose usage. The cycle reset boundary and expiry dates are
+interpreted in the server's local timezone. Agents from v0.0.x don't report
+counters and simply show no traffic data.
+
+Set `PHARUS_ADMIN_TOKEN` on the server to enable the admin API, then click the
+gear icon in the dashboard header to edit each agent. Without it the admin API
+returns 404 and the dashboard stays read-only.
+
+> Billing fields are visible on the public dashboard, like everything else.
+> If prices are sensitive, put the whole site behind a reverse proxy with auth.
 
 ## Protocol
 

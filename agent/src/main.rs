@@ -1,10 +1,15 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use pharus_common::{AgentMsg, Metrics, ServerToAgentMsg, SystemInfo, PROTOCOL_VERSION};
+use pharus_common::{
+    AgentMsg, Metrics, PingResult, PingTarget, ServerToAgentMsg, SystemInfo, TaskKind,
+    UnlockResult, PROTOCOL_VERSION,
+};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind, System};
+use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
@@ -83,7 +88,7 @@ fn collect_sysinfo(sys: &System) -> SystemInfo {
     }
 }
 
-fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, interval_s: u64) -> Metrics {
+fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_total: u64, tx_total: u64, interval_s: u64) -> Metrics {
     let cpu_usage = sys.global_cpu_usage();
     let mut disk_used = 0u64;
     let mut disk_total = 0u64;
@@ -104,8 +109,228 @@ fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, inte
         net_tx_bps: tx_diff / interval_s.max(1),
         load1: load.one,
         uptime: System::uptime(),
+        net_rx_total: rx_total,
+        net_tx_total: tx_total,
     }
 }
+
+type MsgTx = mpsc::UnboundedSender<AgentMsg>;
+
+struct Shared {
+    tcping: Mutex<Vec<PingTarget>>,
+}
+
+/* ---------- TCPing ---------- */
+
+async fn tcp_rtt(host: &str, port: u16) -> Option<f64> {
+    let start = std::time::Instant::now();
+    let addr = format!("{host}:{port}");
+    match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(&addr)).await {
+        Ok(Ok(_)) => Some(start.elapsed().as_secs_f64() * 1000.0),
+        _ => None,
+    }
+}
+
+async fn tcping_loop(msg_tx: MsgTx, shared: Arc<Shared>) {
+    let mut tick = interval(Duration::from_secs(10));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        let targets = shared.tcping.lock().unwrap().clone();
+        if targets.is_empty() {
+            continue;
+        }
+        let mut results = Vec::with_capacity(targets.len());
+        for t in targets {
+            let rtt = tcp_rtt(&t.host, t.port).await;
+            results.push(PingResult { label: t.label, rtt_ms: rtt });
+        }
+        if msg_tx.send(AgentMsg::Ping { results }).is_err() {
+            return;
+        }
+    }
+}
+
+/* ---------- streaming-unlock checks ---------- */
+
+struct UnlockCheck {
+    service: &'static str,
+    url: &'static str,
+    /// 2xx considered reachable; 403 considered blocked
+    want_substr: Option<&'static str>,
+    /// extract "key":"XX" from body as detail
+    detail_key: Option<&'static str>,
+}
+
+const UNLOCK_CHECKS: &[UnlockCheck] = &[
+    UnlockCheck {
+        service: "Netflix",
+        url: "https://www.netflix.com/title/70143836",
+        want_substr: None,
+        detail_key: None,
+    },
+    UnlockCheck {
+        service: "YouTube Premium",
+        url: "https://www.youtube.com/premium",
+        want_substr: Some("countryCode"),
+        detail_key: Some("countryCode"),
+    },
+    UnlockCheck {
+        service: "Disney+",
+        url: "https://www.disneyplus.com",
+        want_substr: None,
+        detail_key: None,
+    },
+    UnlockCheck {
+        service: "ChatGPT",
+        url: "https://chat.openai.com/cdn-cgi/trace",
+        want_substr: Some("loc="),
+        detail_key: Some("loc"),
+    },
+];
+
+fn extract_detail(body: &str, key: &str) -> Option<String> {
+    // matches both `"key":"XX"` and `key=XX`
+    for (idx, _) in body.match_indices(key) {
+        let rest = &body[idx + key.len()..];
+        let rest = rest.trim_start_matches(['"', '=']);
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .unwrap_or(rest.len());
+        if end > 0 && end <= 8 {
+            return Some(rest[..end].to_string());
+        }
+    }
+    None
+}
+
+async fn run_unlock_checks(client: &reqwest::Client) -> Vec<UnlockResult> {
+    let mut out = Vec::with_capacity(UNLOCK_CHECKS.len());
+    for c in UNLOCK_CHECKS {
+        let result = async {
+            let resp = client.get(c.url).send().await?;
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            Ok::<(u16, String), reqwest::Error>((status.as_u16(), body))
+        }
+        .await;
+        let r = match result {
+            Ok((code, body)) if (200..300).contains(&code) => {
+                let ok = c.want_substr.map(|s| body.contains(s)).unwrap_or(true);
+                UnlockResult {
+                    service: c.service.into(),
+                    status: if ok { "yes".into() } else { "no".into() },
+                    detail: c.detail_key.and_then(|k| extract_detail(&body, k)),
+                }
+            }
+            Ok((403, _)) => UnlockResult {
+                service: c.service.into(),
+                status: "no".into(),
+                detail: None,
+            },
+            Ok((code, _)) => UnlockResult {
+                service: c.service.into(),
+                status: "fail".into(),
+                detail: Some(format!("http {code}")),
+            },
+            Err(e) => UnlockResult {
+                service: c.service.into(),
+                status: "fail".into(),
+                detail: Some(e.to_string()),
+            },
+        };
+        out.push(r);
+    }
+    out
+}
+
+async fn unlock_loop(msg_tx: MsgTx, client: reqwest::Client) {
+    // let metrics flow first after (re)connecting
+    sleep(Duration::from_secs(5)).await;
+    let mut tick = interval(Duration::from_secs(30 * 60));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        let results = run_unlock_checks(&client).await;
+        if msg_tx.send(AgentMsg::Unlock { results }).is_err() {
+            return;
+        }
+    }
+}
+
+/* ---------- task execution (looking glass / script) ---------- */
+
+fn task_command(kind: TaskKind, target: &str) -> Option<tokio::process::Command> {
+    #[cfg(windows)]
+    let cmd = {
+        let mut c = std::process::Command::new("cmd");
+        match kind {
+            TaskKind::Ping => {
+                c.args(["/C", "ping", "-n", "4", target]);
+            }
+            TaskKind::Traceroute => {
+                c.args(["/C", "tracert", target]);
+            }
+            TaskKind::Mtr => return None,
+            TaskKind::Script => {
+                c.args(["/C", target]);
+            }
+        }
+        c
+    };
+    #[cfg(not(windows))]
+    let cmd = {
+        let mut c = match kind {
+            TaskKind::Ping => {
+                let mut c = std::process::Command::new("ping");
+                c.args(["-c", "4", "-W", "2", target]);
+                c
+            }
+            TaskKind::Traceroute => {
+                let mut c = std::process::Command::new("traceroute");
+                c.arg(target);
+                c
+            }
+            TaskKind::Mtr => {
+                let mut c = std::process::Command::new("mtr");
+                c.args(["-r", "-c", "4", target]);
+                c
+            }
+            TaskKind::Script => {
+                let mut c = std::process::Command::new("sh");
+                c.args(["-c", target]);
+                c
+            }
+        };
+        c
+    };
+    Some(tokio::process::Command::from(cmd))
+}
+
+async fn run_task(kind: TaskKind, target: &str) -> (i32, String) {
+    let Some(mut cmd) = task_command(kind, target) else {
+        return (-1, "mtr is not supported on Windows agents".into());
+    };
+    match tokio::time::timeout(Duration::from_secs(30), cmd.output()).await {
+        Ok(Ok(o)) => {
+            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if !stderr.is_empty() {
+                text.push_str(&stderr);
+            }
+            const MAX: usize = 32 * 1024;
+            if text.len() > MAX {
+                text.truncate(MAX);
+                text.push_str("\n... (truncated)");
+            }
+            (o.status.code().unwrap_or(-1), text)
+        }
+        Ok(Err(e)) => (-1, format!("failed to run: {e}")),
+        Err(_) => (-1, "task timed out after 30s".into()),
+    }
+}
+
+/* ---------- session ---------- */
 
 async fn run_session(cfg: &Config) -> Result<()> {
     info!(server = %cfg.server, "connecting");
@@ -130,56 +355,119 @@ async fn run_session(cfg: &Config) -> Result<()> {
         ServerToAgentMsg::AuthFail { reason } => {
             anyhow::bail!("auth failed: {reason}")
         }
+        _ => anyhow::bail!("unexpected first server message"),
     }
 
-    let mut sys = System::new_with_specifics(
-        RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::everything())
-            .with_memory(MemoryRefreshKind::everything()),
-    );
-    let mut disks = Disks::new_with_refreshed_list();
-    let mut networks = Networks::new_with_refreshed_list();
+    let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<AgentMsg>();
+    let shared = Arc::new(Shared { tcping: Mutex::new(Vec::new()) });
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+        .build()
+        .context("build http client")?;
 
-    sys.refresh_cpu_usage();
-    sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
+    // single writer: serializes every outgoing AgentMsg
+    let writer = tokio::spawn(async move {
+        while let Some(m) = msg_rx.recv().await {
+            let Ok(s) = serde_json::to_string(&m) else { continue };
+            if write.send(Message::Text(s)).await.is_err() {
+                break;
+            }
+        }
+    });
 
-    write
-        .send(Message::Text(serde_json::to_string(&AgentMsg::SysInfo {
-            info: collect_sysinfo(&sys),
-        })?))
-        .await?;
+    // reader: server downlink (config pushes + tasks)
+    let reader = {
+        let msg_tx = msg_tx.clone();
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            while let Some(frame) = read.next().await {
+                match frame {
+                    Ok(Message::Text(t)) => match serde_json::from_str::<ServerToAgentMsg>(&t) {
+                        Ok(ServerToAgentMsg::Config { tcping }) => {
+                            info!(targets = tcping.len(), "tcping config updated");
+                            *shared.tcping.lock().unwrap() = tcping;
+                        }
+                        Ok(ServerToAgentMsg::RunTask { task_id, kind, target }) => {
+                            let msg_tx = msg_tx.clone();
+                            tokio::spawn(async move {
+                                let (exit_code, output) = run_task(kind, &target).await;
+                                let _ = msg_tx.send(AgentMsg::TaskResult { task_id, exit_code, output });
+                            });
+                        }
+                        _ => {}
+                    },
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(error = %e, "ws read error");
+                        break;
+                    }
+                }
+            }
+        })
+    };
 
-    let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
-    let mut prev_tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
+    let tcping = tokio::spawn(tcping_loop(msg_tx.clone(), shared.clone()));
+    let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
 
-    let mut tick = interval(Duration::from_secs(cfg.interval.max(1)));
-    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    // the first tick fires immediately; discard it so the first network
-    // sample accumulates over a full interval
-    tick.tick().await;
-
-    let mut last_tick = std::time::Instant::now();
-    loop {
-        tick.tick().await;
-        let now = std::time::Instant::now();
-        let elapsed = now.duration_since(last_tick).as_secs().max(1);
-        last_tick = now;
+    // metrics loop (current task)
+    let metrics = async {
+        let mut sys = System::new_with_specifics(
+            RefreshKind::nothing()
+                .with_cpu(CpuRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::everything()),
+        );
+        let mut disks = Disks::new_with_refreshed_list();
+        let mut networks = Networks::new_with_refreshed_list();
 
         sys.refresh_cpu_usage();
-        sys.refresh_memory();
-        disks.refresh(true);
-        networks.refresh(false);
+        sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
 
-        let rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
-        let tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
-        let rx_diff = rx.saturating_sub(prev_rx);
-        let tx_diff = tx.saturating_sub(prev_tx);
-        prev_rx = rx;
-        prev_tx = tx;
+        msg_tx.send(AgentMsg::SysInfo {
+            info: collect_sysinfo(&sys),
+        })?;
 
-        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, elapsed);
-        let msg = serde_json::to_string(&AgentMsg::Metrics { data: metrics })?;
-        write.send(Message::Text(msg)).await?;
+        let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
+        let mut prev_tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
+
+        let mut tick = interval(Duration::from_secs(cfg.interval.max(1)));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // the first tick fires immediately; discard it so the first network
+        // sample accumulates over a full interval
+        tick.tick().await;
+
+        let mut last_tick = std::time::Instant::now();
+        loop {
+            tick.tick().await;
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(last_tick).as_secs().max(1);
+            last_tick = now;
+
+            sys.refresh_cpu_usage();
+            sys.refresh_memory();
+            disks.refresh(true);
+            networks.refresh(false);
+
+            let rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
+            let tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
+            let rx_diff = rx.saturating_sub(prev_rx);
+            let tx_diff = tx.saturating_sub(prev_tx);
+            prev_rx = rx;
+            prev_tx = tx;
+
+            let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, elapsed);
+            msg_tx.send(AgentMsg::Metrics { data: metrics })?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), mpsc::error::SendError<AgentMsg>>(())
+    };
+
+    tokio::select! {
+        _ = writer => anyhow::bail!("ws writer ended"),
+        _ = reader => anyhow::bail!("ws reader ended"),
+        _ = tcping => anyhow::bail!("tcping loop ended"),
+        _ = unlock => anyhow::bail!("unlock loop ended"),
+        r = metrics => r?,
     }
 }
 

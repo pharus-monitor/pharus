@@ -3,9 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title data-i18n="doc.title">Pharus · Server Monitoring</title>
+  <title>Pharus · Demo</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
+  <style>
+    .demo-badge {
+      position: fixed; right: 14px; bottom: 14px; z-index: 50;
+      padding: 5px 12px; border-radius: 999px;
+      background: rgba(251, 191, 36, .14); border: 1px solid rgba(251, 191, 36, .45);
+      color: #fbbf24; font: 12px/1.4 system-ui, sans-serif; letter-spacing: .04em;
+    }
+  </style>
 </head>
 <body>
 
@@ -79,6 +87,8 @@
       </p>
     </div>
   </main>
+
+  <div class="demo-badge">DEMO · mock data · admin token: demo</div>
 
   <template id="card-tpl">
     <article class="card is-offline">
@@ -236,6 +246,161 @@
     </div>
   </div>
 
+  <!-- Mock transport: replaces WebSocket/fetch before app.js loads -->
+  <script>
+    (function () {
+      var AGENT_ID = 1;
+      var started = Date.now();
+      var GiB = 1024 * 1024 * 1024;
+
+      var cycleStart = (function () {
+        var d = new Date();
+        return Math.floor(new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000);
+      })();
+
+      var state = {
+        cpu: 35,
+        memUsed: 3.2 * GiB,
+        memTotal: 8 * GiB,
+        swapUsed: 128 * 1024 * 1024,
+        swapTotal: 2 * GiB,
+        diskUsed: 46 * GiB,
+        diskTotal: 160 * GiB,
+        rx: 1.5 * 1024 * 1024,
+        tx: 700 * 1024,
+        load: 0.8,
+        trafficRx: 412 * GiB,
+        trafficTx: 96 * GiB
+      };
+
+      var billing = {
+        reset_day: 1,
+        quota_bytes: 1024 * GiB,
+        expires_at: Math.floor(Date.now() / 1000) + 26 * 86400,
+        price: 35,
+        currency: 'CNY',
+        cycle: 'monthly'
+      };
+
+      function traffic() {
+        return { cycle_start: cycleStart, rx_bytes: Math.round(state.trafficRx), tx_bytes: Math.round(state.trafficTx) };
+      }
+
+      function walk(v, step, min, max) {
+        v += (Math.random() - 0.5) * 2 * step;
+        return Math.max(min, Math.min(max, v));
+      }
+
+      function metrics() {
+        state.cpu = walk(state.cpu, 7, 2, 97);
+        state.memUsed = walk(state.memUsed, 80 * 1024 * 1024, 1 * GiB, state.memTotal * 0.93);
+        state.swapUsed = walk(state.swapUsed, 4 * 1024 * 1024, 0, state.swapTotal * 0.6);
+        state.diskUsed = walk(state.diskUsed, 2 * 1024 * 1024, 30 * GiB, state.diskTotal * 0.95);
+        state.rx = walk(state.rx, 900 * 1024, 10 * 1024, 60 * 1024 * 1024);
+        state.tx = walk(state.tx, 500 * 1024, 5 * 1024, 25 * 1024 * 1024);
+        state.load = walk(state.load, 0.25, 0.05, 6);
+        state.trafficRx += state.rx;
+        state.trafficTx += state.tx;
+        return {
+          cpu_usage: state.cpu,
+          mem_used: Math.round(state.memUsed),
+          mem_total: state.memTotal,
+          swap_used: Math.round(state.swapUsed),
+          swap_total: state.swapTotal,
+          disk_used: Math.round(state.diskUsed),
+          disk_total: state.diskTotal,
+          net_rx_bps: Math.round(state.rx),
+          net_tx_bps: Math.round(state.tx),
+          load1: state.load,
+          uptime: Math.floor((Date.now() - started) / 1000) + 13 * 86400 + 7 * 3600,
+          net_rx_total: Math.round(state.trafficRx),
+          net_tx_total: Math.round(state.trafficTx)
+        };
+      }
+
+      var snapshot = {
+        type: 'snapshot',
+        agents: [{
+          agent_id: AGENT_ID,
+          name: 'demo-vps-tokyo',
+          online: true,
+          info: {
+            hostname: 'demo-vps-tokyo',
+            os: 'Debian GNU/Linux 12 (bookworm)',
+            kernel: '6.1.0-26-amd64',
+            arch: 'x86_64',
+            cpu_model: 'AMD EPYC 7543P 32-Core Processor',
+            cpu_cores: 4,
+            virtualization: 'kvm'
+          },
+          data: metrics(),
+          billing: billing,
+          traffic: traffic()
+        }]
+      };
+
+      var tickCount = 0;
+      function MockWebSocket(url) {
+        var self = this;
+        self.readyState = 0;
+        setTimeout(function () {
+          self.readyState = 1;
+          if (self.onopen) self.onopen({});
+        }, 150);
+        setTimeout(function () {
+          if (self.onmessage) self.onmessage({ data: JSON.stringify(snapshot) });
+          setInterval(function () {
+            if (!self.onmessage) return;
+            self.onmessage({
+              data: JSON.stringify({ type: 'metrics', agent_id: AGENT_ID, online: true, data: metrics() })
+            });
+            // push updated period traffic every ~5s, like the server does after flushes
+            if (++tickCount % 5 === 0) {
+              self.onmessage({
+                data: JSON.stringify({ type: 'billing', agent_id: AGENT_ID, billing: billing, traffic: traffic() })
+              });
+            }
+          }, 1000);
+        }, 400);
+      }
+      MockWebSocket.prototype.close = function () { this.readyState = 3; };
+      MockWebSocket.prototype.send = function () {};
+      window.WebSocket = MockWebSocket;
+
+      // mock admin API (token: demo)
+      var realFetch = window.fetch.bind(window);
+      window.fetch = function (url, opts) {
+        if (typeof url !== 'string' || url.indexOf('/api/admin/') !== 0) {
+          return realFetch(url, opts);
+        }
+        opts = opts || {};
+        var auth = (opts.headers && opts.headers.Authorization) || '';
+        if (url === '/api/admin/check') {
+          return Promise.resolve(new Response('', { status: auth === 'Bearer demo' ? 200 : 401 }));
+        }
+        if (url.indexOf('/api/admin/agents/') === 0 && opts.method === 'PUT') {
+          if (auth !== 'Bearer demo') {
+            return Promise.resolve(new Response(JSON.stringify({ error: 'invalid admin token' }), { status: 401 }));
+          }
+          var body = JSON.parse(opts.body || '{}');
+          billing = {
+            reset_day: body.reset_day,
+            quota_bytes: body.quota_gb != null ? Math.round(body.quota_gb * GiB) : null,
+            expires_at: body.expires_on ? Math.floor(new Date(body.expires_on + 'T00:00:00').getTime() / 1000) : null,
+            price: body.price,
+            currency: body.currency,
+            cycle: body.cycle
+          };
+          console.log('[demo] billing updated:', billing);
+          return Promise.resolve(new Response(JSON.stringify({ billing: billing, traffic: traffic() }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      };
+    })();
+  </script>
   <script src="app.js"></script>
 </body>
 </html>
