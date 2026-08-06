@@ -27,23 +27,34 @@ Agent 主动出站连 Server（NAT 友好），单连接双向复用；Server �
 
 ## 快速开始
 
-从 [Releases](https://github.com/pharus-monitor/pharus/releases) 下载预编译静态
-二进制（x86_64 / i686 / aarch64），或从源码构建：
+预编译静态二进制（x86_64 / i686 / aarch64，musl，任何发行版可直接运行）见
+[Releases](https://github.com/pharus-monitor/pharus/releases)：
 
 ```bash
-cargo build --release
+# 0. 下载并解压 Server（内含 pharus + themes/ + deploy/）
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-linux-x86_64.tar.gz
+tar -xzf pharus-linux-x86_64.tar.gz
 
 # 1. 注册一台被监控机，得到 token
 ./pharus add-agent --name my-vps
 
 # 2. 启动 Server（默认 0.0.0.0:8080）
-./pharus serve --themes server/themes
+./pharus serve --themes themes
 
 # 3. 在被监控机上启动 Agent
 ./pharus-agent --server ws://<server>:8080/ws/agent --token <token>
 ```
 
+也可以用一键脚本安装 Agent（自动识别架构并配置 systemd）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pharus-monitor/pharus/main/scripts/install-agent.sh | sudo bash -s -- \
+  --server ws://<server>:8080/ws/agent --token <token>
+```
+
 打开 `http://<server>:8080` 即可看到实时面板。
+
+如需从源码构建：`cargo build --release`。
 
 > 生产环境完整部署（systemd、Docker、HTTPS 反代、Windows 被控端、排错）：
 > **[docs/deployment.zh-CN.md](docs/deployment.zh-CN.md)**

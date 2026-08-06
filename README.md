@@ -30,23 +30,34 @@ The server keeps live state in memory, writes downsampled history to SQLite ever
 
 ## Quick Start
 
-Download prebuilt static binaries (x86_64 / i686 / aarch64) from
-[Releases](https://github.com/pharus-monitor/pharus/releases), or build from source:
+Prebuilt static binaries (x86_64 / i686 / aarch64, musl — runs on any distro)
+are on [Releases](https://github.com/pharus-monitor/pharus/releases):
 
 ```bash
-cargo build --release
+# 0. Download and unpack the server (contains pharus + themes/ + deploy/)
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-linux-x86_64.tar.gz
+tar -xzf pharus-linux-x86_64.tar.gz
 
 # 1. Register a monitored machine, get a token
 ./pharus add-agent --name my-vps
 
 # 2. Start the server (default 0.0.0.0:8080)
-./pharus serve --themes server/themes
+./pharus serve --themes themes
 
 # 3. Start the agent on the monitored machine
 ./pharus-agent --server ws://<server>:8080/ws/agent --token <token>
 ```
 
+Or install the agent with the one-line script (auto-detects arch, sets up systemd):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pharus-monitor/pharus/main/scripts/install-agent.sh | sudo bash -s -- \
+  --server ws://<server>:8080/ws/agent --token <token>
+```
+
 Open `http://<server>:8080` to see the live dashboard.
+
+Building from source instead: `cargo build --release`.
 
 > Full production deployment (systemd, Docker, HTTPS reverse proxy, Windows
 > agents, troubleshooting): **[docs/deployment.md](docs/deployment.md)**
