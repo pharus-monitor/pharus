@@ -451,14 +451,6 @@ pub fn metrics_history(
 
 // ---------------------------------------------------------------- ping tasks
 
-fn ping_kind_to_str(k: PingKind) -> &'static str {
-    match k {
-        PingKind::Icmp => "icmp",
-        PingKind::Tcp => "tcp",
-        PingKind::Http => "http",
-    }
-}
-
 pub fn ping_kind_from_str(s: &str) -> Option<PingKind> {
     match s {
         "icmp" => Some(PingKind::Icmp),
@@ -503,7 +495,7 @@ pub fn list_ping_tasks(conn: &Connection) -> Result<Vec<PingTaskRow>> {
     let mut stmt =
         conn.prepare(&format!("SELECT {PING_TASK_COLS} FROM ping_tasks ORDER BY id"))?;
     let rows = stmt
-        .query_map([], |r| ping_task_from_row(r))?
+        .query_map([], ping_task_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -515,7 +507,7 @@ pub fn ping_tasks_for(conn: &Connection, agent_id: i64) -> Result<Vec<PingTaskSp
          WHERE enabled = 1 AND (agent_id IS NULL OR agent_id = ?1) ORDER BY id"
     ))?;
     let rows = stmt
-        .query_map(params![agent_id], |r| ping_task_from_row(r))?
+        .query_map(params![agent_id], ping_task_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows
         .into_iter()
@@ -661,7 +653,7 @@ const TASK_COLS: &str = "id, name, command, agent_id, interval_sec, timeout_sec,
 pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskRow>> {
     let mut stmt = conn.prepare(&format!("SELECT {TASK_COLS} FROM tasks ORDER BY id"))?;
     let rows = stmt
-        .query_map([], |r| task_from_row(r))?
+        .query_map([], task_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -671,7 +663,7 @@ pub fn get_task(conn: &Connection, id: i64) -> Result<Option<TaskRow>> {
         .query_row(
             &format!("SELECT {TASK_COLS} FROM tasks WHERE id = ?1"),
             params![id],
-            |r| task_from_row(r),
+            task_from_row,
         )
         .optional()?;
     Ok(row)
@@ -686,7 +678,7 @@ pub fn tasks_for(conn: &Connection, agent_id: i64) -> Result<Vec<CustomTaskSpec>
          ORDER BY id"
     ))?;
     let rows = stmt
-        .query_map(params![agent_id], |r| task_from_row(r))?
+        .query_map(params![agent_id], task_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows
         .into_iter()
@@ -761,6 +753,20 @@ pub struct TaskResultRow {
     pub ts: i64,
     pub exit_code: i32,
     pub output: String,
+}
+
+/// Newest result per (task, agent) as `(ts, exit_code)`. Alert evaluation runs
+/// this on every tick while holding the db lock, so it deliberately skips the
+/// `output` column — those rows carry up to 32 KiB each.
+pub fn latest_task_results(conn: &Connection) -> Result<HashMap<(i64, i64), (i64, i32)>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id, agent_id, ts, exit_code FROM task_results
+         WHERE id IN (SELECT MAX(id) FROM task_results GROUP BY task_id, agent_id)",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok(((r.get(0)?, r.get(1)?), (r.get(2)?, r.get(3)?))))?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+    Ok(rows)
 }
 
 pub fn list_task_results(
@@ -954,7 +960,7 @@ pub fn list_alert_rules(conn: &Connection) -> Result<Vec<AlertRuleRow>> {
     let mut stmt =
         conn.prepare(&format!("SELECT {ALERT_RULE_COLS} FROM alert_rules ORDER BY id"))?;
     let rows = stmt
-        .query_map([], |r| alert_rule_from_row(r))?
+        .query_map([], alert_rule_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -1078,7 +1084,7 @@ pub fn list_channels(conn: &Connection) -> Result<Vec<ChannelRow>> {
     let mut stmt =
         conn.prepare("SELECT id, name, kind, config, enabled FROM notification_channels ORDER BY id")?;
     let rows = stmt
-        .query_map([], |r| channel_from_row(r))?
+        .query_map([], channel_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -1088,7 +1094,7 @@ pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<ChannelRow>> {
         .query_row(
             "SELECT id, name, kind, config, enabled FROM notification_channels WHERE id = ?1",
             params![id],
-            |r| channel_from_row(r),
+            channel_from_row,
         )
         .optional()?;
     Ok(row)

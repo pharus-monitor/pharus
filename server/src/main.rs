@@ -1,8 +1,11 @@
 mod admin;
 mod alerts;
+mod api;
 mod billing;
 mod crypto;
 mod db;
+mod diag;
+mod features;
 mod notify;
 mod regions;
 mod state;
@@ -139,6 +142,7 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
 
     let billing_map = db::list_billing(&conn)?;
     let traffic_map = db::load_traffic(&conn)?;
+    let region_map = db::list_regions(&conn)?;
     let mut agents = HashMap::new();
     for (id, name) in db::list_agents(&conn)? {
         let traffic = traffic_map
@@ -157,6 +161,9 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
                 name,
                 billing: billing_map.get(&id).cloned(),
                 traffic,
+                region: region_map.get(&id).map(|(c, s)| db::make_region(c, s)),
+                features: features::effective_for(&conn, id).unwrap_or_default(),
+                unlock: db::list_streaming(&conn, id).unwrap_or_default(),
                 ..AgentState::default()
             },
         );
@@ -171,15 +178,20 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
         themes_root: themes_root.clone(),
         admin_token,
         task_waiters: Mutex::new(HashMap::new()),
+        diag_pending: Mutex::new(HashMap::new()),
     });
+
+    alerts::spawn(state.clone());
 
     {
         let state = state.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut ticks: u64 = 0;
             loop {
                 tick.tick().await;
+                ticks += 1;
                 let (rows, traffic_rows) = {
                     let agents = state.agents.read().unwrap();
                     let rows: Vec<(i64, pharus_common::Metrics)> = agents
@@ -213,6 +225,13 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
                         tracing::warn!(agent_id = id, error = %e, "history insert failed");
                     }
                 }
+                // hourly: drop ping samples past the 30 day retention window
+                if ticks.is_multiple_of(60) {
+                    let cutoff = chrono::Utc::now().timestamp() - 30 * 86_400;
+                    if let Err(e) = db::prune_ping_history(&db, cutoff) {
+                        tracing::warn!(error = %e, "ping history prune failed");
+                    }
+                }
             }
         });
     }
@@ -221,6 +240,7 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
         .route("/ws/agent", get(agent_ws))
         .route("/api/stream", get(browser_ws))
         .route("/api/status", get(status_json))
+        .merge(api::router())
         .merge(admin::router(state.clone()))
         .fallback(themed_static)
         .with_state(state);

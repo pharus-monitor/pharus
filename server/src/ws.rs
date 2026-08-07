@@ -90,6 +90,18 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (agent_tx, mut agent_rx) =
         tokio::sync::mpsc::unbounded_channel::<pharus_common::ServerToAgentMsg>();
+    // Load persisted per-agent state before touching the agents map; the lock
+    // order is db → agents everywhere.
+    let (region, features, unlock) = {
+        let db = state.db.lock().unwrap();
+        let region = crate::db::list_regions(&db)
+            .ok()
+            .and_then(|m| m.get(&agent_id).map(|(c, s)| crate::db::make_region(c, s)));
+        let features = crate::features::effective_for(&db, agent_id).unwrap_or_default();
+        let unlock = crate::db::list_streaming(&db, agent_id).unwrap_or_default();
+        (region, features, unlock)
+    };
+
     {
         let mut agents = state.agents.write().unwrap();
         let entry = agents.entry(agent_id).or_default();
@@ -97,11 +109,19 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
         entry.online = true;
         entry.conn_epoch = epoch;
         entry.agent_tx = Some(agent_tx);
+        entry.region = region.clone();
+        entry.features = features.clone();
+        if entry.unlock.is_empty() {
+            entry.unlock = unlock;
+        }
     }
     state.broadcast(BrowserMsg::Status {
         agent_id,
         online: true,
     });
+    state.broadcast(BrowserMsg::RegionUpdate { agent_id, region });
+    state.broadcast(BrowserMsg::FeaturesUpdate { agent_id, features });
+    state.push_tasks(agent_id);
     info!(agent_id, name, "agent connected");
 
     loop {
@@ -145,16 +165,36 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                         });
                     }
                     Ok(AgentMsg::Ping { results }) => {
-                        let mut agents = state.agents.write().unwrap();
-                        if let Some(a) = agents.get_mut(&agent_id) {
-                            a.pings = results.clone();
+                        {
+                            // Only server-managed tasks carry a task_id; ad-hoc
+                            // legacy tcping results are live-only.
+                            let db = state.db.lock().unwrap();
+                            for r in results.iter().filter(|r| r.task_id.is_some()) {
+                                if let Err(e) = crate::db::insert_ping_history(&db, agent_id, r) {
+                                    warn!(agent_id, error = %e, "ping history insert failed");
+                                }
+                            }
+                        }
+                        {
+                            let mut agents = state.agents.write().unwrap();
+                            if let Some(a) = agents.get_mut(&agent_id) {
+                                a.pings = results.clone();
+                            }
                         }
                         state.broadcast(BrowserMsg::Pings { agent_id, results });
                     }
                     Ok(AgentMsg::Unlock { results }) => {
-                        let mut agents = state.agents.write().unwrap();
-                        if let Some(a) = agents.get_mut(&agent_id) {
-                            a.unlock = results.clone();
+                        {
+                            let db = state.db.lock().unwrap();
+                            if let Err(e) = crate::db::replace_streaming(&db, agent_id, &results) {
+                                warn!(agent_id, error = %e, "streaming result save failed");
+                            }
+                        }
+                        {
+                            let mut agents = state.agents.write().unwrap();
+                            if let Some(a) = agents.get_mut(&agent_id) {
+                                a.unlock = results.clone();
+                            }
                         }
                         state.broadcast(BrowserMsg::Unlock { agent_id, results });
                     }
@@ -215,8 +255,14 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             }
                         }
                     }
-                    // relayed to browsers by the diagnostics module
-                    Ok(AgentMsg::CmdOutput { .. }) | Ok(AgentMsg::MtrResult { .. }) => {}
+                    Ok(AgentMsg::CmdOutput { request_id, stream, data, done, exit_code }) => {
+                        crate::diag::relay_output(
+                            &state, agent_id, request_id, stream, data, done, exit_code,
+                        );
+                    }
+                    Ok(AgentMsg::MtrResult { request_id, hubs }) => {
+                        crate::diag::relay_mtr(&state, agent_id, request_id, hubs);
+                    }
                     Ok(AgentMsg::Auth { .. }) => {
                         warn!(agent_id, "unexpected re-auth, dropping");
                         break;
@@ -249,6 +295,7 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
             }
         }
     }
+    crate::diag::cancel_for_agent(&state, agent_id);
     state.broadcast(BrowserMsg::Status {
         agent_id,
         online: false,

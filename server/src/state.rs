@@ -67,11 +67,55 @@ pub struct AppState {
     pub admin_token: Option<String>,
     /// Pending one-shot waiters for task results keyed by task_id.
     pub task_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<pharus_common::AgentMsg>>>,
+    /// In-flight browser-initiated diagnostics keyed by request_id.
+    pub diag_pending: Mutex<HashMap<String, crate::diag::DiagPending>>,
 }
 
 impl AppState {
     pub fn broadcast(&self, msg: BrowserMsg) {
         let _ = self.browser_tx.send(msg);
+    }
+
+    /// Push an agent's current scheduled ping + custom task set over its live
+    /// socket. Silently does nothing when the agent is offline; the set is
+    /// pushed again on reconnect.
+    pub fn push_tasks(&self, agent_id: i64) {
+        let loaded = {
+            let conn = self.db.lock().unwrap();
+            crate::db::ping_tasks_for(&conn, agent_id)
+                .and_then(|p| Ok((p, crate::db::tasks_for(&conn, agent_id)?)))
+        };
+        let (ping_tasks, custom_tasks) = match loaded {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(agent_id, error = %e, "task sync load failed");
+                return;
+            }
+        };
+        let tx = {
+            let agents = self.agents.read().unwrap();
+            agents.get(&agent_id).and_then(|a| a.agent_tx.clone())
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send(pharus_common::ServerToAgentMsg::TasksSync {
+                ping_tasks,
+                custom_tasks,
+            });
+        }
+    }
+
+    pub fn push_tasks_all(&self) {
+        let ids: Vec<i64> = {
+            let agents = self.agents.read().unwrap();
+            agents
+                .iter()
+                .filter(|(_, a)| a.online)
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        for id in ids {
+            self.push_tasks(id);
+        }
     }
 }
 
