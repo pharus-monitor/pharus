@@ -206,6 +206,9 @@ pub enum ServerToAgentMsg {
         /// Probe/report cycles, currently honoured by MTR.
         #[serde(default)]
         cycles: Option<u32>,
+        /// Seconds before the agent kills the process; agent default when unset.
+        #[serde(default)]
+        timeout: Option<u64>,
     },
     TasksSync {
         ping_tasks: Vec<PingTaskSpec>,
@@ -248,7 +251,7 @@ pub enum BrowserMsg {
     DiagResult {
         request_id: String,
         agent_id: i64,
-        /// "lg" | "mtr"
+        /// "ping" | "traceroute" | "mtr"
         kind: String,
         #[serde(default)]
         stream: Option<String>,

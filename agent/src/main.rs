@@ -2,13 +2,16 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use pharus_common::{
-    AgentMsg, Metrics, PingResult, PingTarget, ServerToAgentMsg, SystemInfo, TaskKind,
-    UnlockResult, PROTOCOL_VERSION,
+    AgentMsg, CustomTaskSpec, Metrics, MtrHop, PingKind, PingResult, PingTarget, PingTaskSpec,
+    ServerToAgentMsg, SystemInfo, TaskKind, UnlockResult, PROTOCOL_VERSION,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind, System};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -116,14 +119,17 @@ fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_t
 
 type MsgTx = mpsc::UnboundedSender<AgentMsg>;
 
+#[derive(Default)]
 struct Shared {
     tcping: Mutex<Vec<PingTarget>>,
+    ping_tasks: Mutex<Vec<PingTaskSpec>>,
+    custom_tasks: Mutex<Vec<CustomTaskSpec>>,
 }
 
-/* ---------- TCPing ---------- */
+/* ---------- probes ---------- */
 
 async fn tcp_rtt(host: &str, port: u16) -> Option<f64> {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let addr = format!("{host}:{port}");
     match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(&addr)).await {
         Ok(Ok(_)) => Some(start.elapsed().as_secs_f64() * 1000.0),
@@ -131,29 +137,200 @@ async fn tcp_rtt(host: &str, port: u16) -> Option<f64> {
     }
 }
 
-async fn tcping_loop(msg_tx: MsgTx, shared: Arc<Shared>) {
-    let mut tick = interval(Duration::from_secs(10));
+async fn http_rtt(client: &reqwest::Client, target: &str) -> Option<f64> {
+    let url = match target.starts_with("http") {
+        true => target.to_string(),
+        false => format!("https://{target}"),
+    };
+    let start = Instant::now();
+    match client.get(url).send().await {
+        Ok(r) if r.status().as_u16() < 500 => Some(start.elapsed().as_secs_f64() * 1000.0),
+        _ => None,
+    }
+}
+
+/// `(avg, min, max, loss)` — loss is the fraction of probes that got no reply.
+type Rtt = (Option<f64>, Option<f64>, Option<f64>, f64);
+
+fn summarize(samples: &[f64], attempts: u32) -> Rtt {
+    let loss = 1.0 - samples.len() as f64 / attempts.max(1) as f64;
+    if samples.is_empty() {
+        return (None, None, None, loss);
+    }
+    let sum: f64 = samples.iter().sum();
+    let min = samples.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (Some(sum / samples.len() as f64), Some(min), Some(max), loss)
+}
+
+/// Reads the summary block of `ping`. Handles both the Unix
+/// `rtt min/avg/max/mdev = …` form and the Windows `Minimum = …ms` form.
+fn parse_ping_summary(text: &str) -> Rtt {
+    let mut loss = 1.0;
+    for line in text.lines() {
+        if let Some(pos) = line.find("% packet loss").or_else(|| line.find("% loss")) {
+            let head = &line[..pos];
+            let start = head
+                .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            if let Ok(v) = head[start..].parse::<f64>() {
+                loss = v / 100.0;
+            }
+        }
+    }
+    for line in text.lines() {
+        if line.contains("min/avg/max") {
+            if let Some((_, tail)) = line.split_once('=') {
+                let nums: Vec<f64> = tail
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .split('/')
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if nums.len() >= 3 {
+                    return (Some(nums[1]), Some(nums[0]), Some(nums[2]), loss);
+                }
+            }
+        }
+        if line.contains("Minimum =") && line.contains("Average =") {
+            let nums: Vec<f64> = line
+                .split(['=', ',', 'm'])
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            if nums.len() >= 3 {
+                return (Some(nums[2]), Some(nums[0]), Some(nums[1]), loss);
+            }
+        }
+    }
+    (None, None, None, loss)
+}
+
+async fn icmp_probe(target: &str, count: u32) -> Rtt {
+    let (_, text) = run_task(TaskKind::Ping, target, Some(count), 30).await;
+    parse_ping_summary(&text)
+}
+
+async fn probe_ping_task(spec: &PingTaskSpec, http: &reqwest::Client) -> PingResult {
+    let count = spec.count.clamp(1, 20);
+    let (avg, min, max, loss) = match spec.kind {
+        PingKind::Icmp => icmp_probe(&spec.target, count).await,
+        PingKind::Tcp => {
+            let port = spec.port.unwrap_or(80);
+            let mut samples = Vec::new();
+            for _ in 0..count {
+                if let Some(v) = tcp_rtt(&spec.target, port).await {
+                    samples.push(v);
+                }
+            }
+            summarize(&samples, count)
+        }
+        PingKind::Http => {
+            let mut samples = Vec::new();
+            for _ in 0..count {
+                if let Some(v) = http_rtt(http, &spec.target).await {
+                    samples.push(v);
+                }
+            }
+            summarize(&samples, count)
+        }
+    };
+    PingResult {
+        label: spec.label.clone(),
+        rtt_ms: avg,
+        task_id: Some(spec.id),
+        rtt_min: min,
+        rtt_max: max,
+        loss,
+    }
+}
+
+/// Every report carries the agent's full current result set, so the server can
+/// keep replacing rather than merging — a task deleted server-side simply stops
+/// appearing here.
+async fn ping_scheduler(msg_tx: MsgTx, shared: Arc<Shared>, http: reqwest::Client) {
+    let mut next_run: HashMap<i64, Instant> = HashMap::new();
+    let mut task_results: HashMap<i64, PingResult> = HashMap::new();
+    let mut legacy: Vec<PingResult> = Vec::new();
+    let mut legacy_at = Instant::now();
+
+    let mut tick = interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
+        let now = Instant::now();
+        let mut changed = false;
+
         let targets = shared.tcping.lock().unwrap().clone();
-        if targets.is_empty() {
-            continue;
+        if !targets.is_empty() && now >= legacy_at {
+            legacy_at = now + Duration::from_secs(10);
+            legacy.clear();
+            for t in targets {
+                let rtt = tcp_rtt(&t.host, t.port).await;
+                legacy.push(PingResult {
+                    label: t.label,
+                    rtt_ms: rtt,
+                    task_id: None,
+                    rtt_min: rtt,
+                    rtt_max: rtt,
+                    loss: if rtt.is_some() { 0.0 } else { 1.0 },
+                });
+            }
+            changed = true;
         }
-        let mut results = Vec::with_capacity(targets.len());
-        for t in targets {
-            let rtt = tcp_rtt(&t.host, t.port).await;
-            results.push(PingResult {
-                label: t.label,
-                rtt_ms: rtt,
-                task_id: None,
-                rtt_min: rtt,
-                rtt_max: rtt,
-                loss: if rtt.is_some() { 0.0 } else { 1.0 },
+
+        let specs = shared.ping_tasks.lock().unwrap().clone();
+        task_results.retain(|id, _| specs.iter().any(|s| s.id == *id));
+        next_run.retain(|id, _| specs.iter().any(|s| s.id == *id));
+        for spec in &specs {
+            let at = *next_run.entry(spec.id).or_insert(now);
+            if now < at {
+                continue;
+            }
+            next_run.insert(spec.id, Instant::now() + Duration::from_secs(spec.interval.max(5)));
+            task_results.insert(spec.id, probe_ping_task(spec, &http).await);
+            changed = true;
+        }
+
+        if changed {
+            let mut results = legacy.clone();
+            results.extend(task_results.values().cloned());
+            if msg_tx.send(AgentMsg::Ping { results }).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+async fn custom_task_scheduler(msg_tx: MsgTx, shared: Arc<Shared>) {
+    let mut next_run: HashMap<i64, Instant> = HashMap::new();
+    let mut tick = interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        let now = Instant::now();
+        let specs = shared.custom_tasks.lock().unwrap().clone();
+        next_run.retain(|id, _| specs.iter().any(|s| s.id == *id));
+        // interval 0 means the task only ever runs when an operator triggers it
+        for spec in specs.iter().filter(|s| s.interval > 0) {
+            let at = *next_run.entry(spec.id).or_insert(now);
+            if now < at {
+                continue;
+            }
+            next_run.insert(spec.id, now + Duration::from_secs(spec.interval.max(10)));
+            let msg_tx = msg_tx.clone();
+            let spec = spec.clone();
+            tokio::spawn(async move {
+                let (exit_code, output) =
+                    run_task(TaskKind::Script, &spec.command, None, spec.timeout).await;
+                let _ = msg_tx.send(AgentMsg::TaskResult {
+                    task_id: format!("sched-{}", spec.id),
+                    exit_code,
+                    output,
+                    scheduled_id: Some(spec.id),
+                });
             });
-        }
-        if msg_tx.send(AgentMsg::Ping { results }).is_err() {
-            return;
         }
     }
 }
@@ -267,12 +444,15 @@ async fn unlock_loop(msg_tx: MsgTx, client: reqwest::Client) {
 
 /* ---------- task execution (looking glass / script) ---------- */
 
-fn task_command(kind: TaskKind, target: &str) -> Option<tokio::process::Command> {
+/// The target is always an argv entry, never interpolated into a shell string,
+/// so nothing here can be turned into extra arguments or commands.
+fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tokio::process::Command> {
+    let cycles = cycles.unwrap_or(4).clamp(1, 30).to_string();
     #[cfg(windows)]
     let cmd = match kind {
         TaskKind::Ping => {
             let mut c = std::process::Command::new("ping");
-            c.args(["-n", "4", target]);
+            c.args(["-n", &cycles, target]);
             c
         }
         TaskKind::Traceroute => {
@@ -291,7 +471,7 @@ fn task_command(kind: TaskKind, target: &str) -> Option<tokio::process::Command>
     let cmd = match kind {
         TaskKind::Ping => {
             let mut c = std::process::Command::new("ping");
-            c.args(["-c", "4", "-W", "2", target]);
+            c.args(["-c", &cycles, "-W", "2", target]);
             c
         }
         TaskKind::Traceroute => {
@@ -301,7 +481,7 @@ fn task_command(kind: TaskKind, target: &str) -> Option<tokio::process::Command>
         }
         TaskKind::Mtr => {
             let mut c = std::process::Command::new("mtr");
-            c.args(["-r", "-c", "4", target]);
+            c.args(["-r", "-c", &cycles, target]);
             c
         }
         TaskKind::Script => {
@@ -313,11 +493,17 @@ fn task_command(kind: TaskKind, target: &str) -> Option<tokio::process::Command>
     Some(tokio::process::Command::from(cmd))
 }
 
-async fn run_task(kind: TaskKind, target: &str) -> (i32, String) {
-    let Some(mut cmd) = task_command(kind, target) else {
+async fn run_task(
+    kind: TaskKind,
+    target: &str,
+    cycles: Option<u32>,
+    timeout: u64,
+) -> (i32, String) {
+    let Some(mut cmd) = task_command(kind, target, cycles) else {
         return (-1, "mtr is not supported on Windows agents".into());
     };
-    match tokio::time::timeout(Duration::from_secs(30), cmd.output()).await {
+    let timeout = timeout.clamp(1, 600);
+    match tokio::time::timeout(Duration::from_secs(timeout), cmd.output()).await {
         Ok(Ok(o)) => {
             let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&o.stderr);
@@ -332,8 +518,150 @@ async fn run_task(kind: TaskKind, target: &str) -> (i32, String) {
             (o.status.code().unwrap_or(-1), text)
         }
         Ok(Err(e)) => (-1, format!("failed to run: {e}")),
-        Err(_) => (-1, "task timed out after 30s".into()),
+        Err(_) => (-1, format!("task timed out after {timeout}s")),
     }
+}
+
+/// Parses `mtr -r` report rows: `1.|-- host  0.0%  4  0.5  0.6  0.5  0.7  0.1`.
+/// The numeric columns are read from the right so a long hostname cannot shift
+/// the offsets.
+fn parse_mtr_report(text: &str) -> Vec<MtrHop> {
+    let mut hops = Vec::new();
+    for line in text.lines() {
+        let Some((idx, rest)) = line.trim().split_once("|--") else {
+            continue;
+        };
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        if fields.len() < 8 {
+            continue;
+        }
+        let n = fields.len();
+        let num = |back: usize| -> f64 {
+            fields[n - back].trim_end_matches('%').parse().unwrap_or(0.0)
+        };
+        hops.push(MtrHop {
+            hop: idx.trim().trim_end_matches('.').parse().unwrap_or(0),
+            host: fields[0].to_string(),
+            loss: num(7) / 100.0,
+            sent: num(6) as u32,
+            avg: num(4),
+            best: num(3),
+            worst: num(2),
+            stdev: num(1),
+        });
+    }
+    hops
+}
+
+/// Per-stream output cap for a streamed diagnostic.
+const STREAM_CAP: usize = 128 * 1024;
+
+fn spawn_pump<R>(reader: R, msg_tx: MsgTx, request_id: String, stream: &'static str) -> tokio::task::JoinHandle<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(reader).lines();
+        let mut used = 0usize;
+        while let Ok(Some(line)) = lines.next_line().await {
+            if used >= STREAM_CAP {
+                continue;
+            }
+            used += line.len() + 1;
+            let sent = msg_tx.send(AgentMsg::CmdOutput {
+                request_id: request_id.clone(),
+                stream: stream.into(),
+                data: format!("{line}\n"),
+                done: false,
+                exit_code: None,
+            });
+            if sent.is_err() {
+                return;
+            }
+        }
+    })
+}
+
+/// Runs a browser-initiated diagnostic, streaming output back as it arrives.
+/// MTR is reported as one structured result instead, since its report is only
+/// meaningful once complete.
+async fn stream_task(
+    msg_tx: MsgTx,
+    request_id: String,
+    kind: TaskKind,
+    target: String,
+    cycles: Option<u32>,
+) {
+    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
+        request_id: request_id.clone(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    };
+
+    if kind == TaskKind::Mtr {
+        let (code, text) = run_task(kind, &target, cycles, 180).await;
+        let hops = parse_mtr_report(&text);
+        let msg = match hops.is_empty() {
+            // surface the raw failure instead of an empty table
+            true => finish(text, code),
+            false => AgentMsg::MtrResult {
+                request_id: request_id.clone(),
+                hubs: hops,
+            },
+        };
+        let _ = msg_tx.send(msg);
+        return;
+    }
+
+    let Some(mut cmd) = task_command(kind, &target, cycles) else {
+        let _ = msg_tx.send(finish("unsupported diagnostic on this platform".into(), -1));
+        return;
+    };
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = msg_tx.send(finish(format!("failed to run: {e}\n"), -1));
+            return;
+        }
+    };
+
+    let pumps = [
+        child.stdout.take().map(|r| spawn_pump(r, msg_tx.clone(), request_id.clone(), "stdout")),
+        child.stderr.take().map(|r| spawn_pump(r, msg_tx.clone(), request_id.clone(), "stderr")),
+    ];
+
+    let exit_code = match tokio::time::timeout(Duration::from_secs(120), child.wait()).await {
+        Ok(Ok(s)) => s.code().unwrap_or(-1),
+        Ok(Err(_)) => -1,
+        Err(_) => {
+            let _ = child.kill().await;
+            -1
+        }
+    };
+    // drain both pumps first so the terminal frame really is last
+    for p in pumps.into_iter().flatten() {
+        let _ = p.await;
+    }
+    let _ = msg_tx.send(finish(String::new(), exit_code));
+}
+
+/// Best-effort country lookup, reported once per connection.
+async fn detect_region(client: &reqwest::Client) -> Option<String> {
+    if let Ok(r) = client.get("https://www.cloudflare.com/cdn-cgi/trace").send().await {
+        if let Ok(body) = r.text().await {
+            if let Some(code) = body.lines().find_map(|l| l.strip_prefix("loc=")) {
+                if code.len() == 2 {
+                    return Some(code.to_uppercase());
+                }
+            }
+        }
+    }
+    let text = client.get("https://ipinfo.io/country").send().await.ok()?.text().await.ok()?;
+    let code = text.trim();
+    (code.len() == 2).then(|| code.to_uppercase())
 }
 
 /* ---------- session ---------- */
@@ -365,7 +693,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
     }
 
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<AgentMsg>();
-    let shared = Arc::new(Shared { tcping: Mutex::new(Vec::new()) });
+    let shared = Arc::new(Shared::default());
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
@@ -394,10 +722,29 @@ async fn run_session(cfg: &Config) -> Result<()> {
                             info!(targets = tcping.len(), "tcping config updated");
                             *shared.tcping.lock().unwrap() = tcping;
                         }
-                        Ok(ServerToAgentMsg::RunTask { task_id, kind, target, .. }) => {
+                        Ok(ServerToAgentMsg::TasksSync { ping_tasks, custom_tasks }) => {
+                            info!(
+                                pings = ping_tasks.len(),
+                                tasks = custom_tasks.len(),
+                                "task list synced"
+                            );
+                            *shared.ping_tasks.lock().unwrap() = ping_tasks;
+                            *shared.custom_tasks.lock().unwrap() = custom_tasks;
+                        }
+                        // Script runs return one buffered result; the network
+                        // diagnostics stream so the browser sees them live.
+                        Ok(ServerToAgentMsg::RunTask {
+                            task_id,
+                            kind: TaskKind::Script,
+                            target,
+                            cycles: _,
+                            timeout,
+                        }) => {
                             let msg_tx = msg_tx.clone();
                             tokio::spawn(async move {
-                                let (exit_code, output) = run_task(kind, &target).await;
+                                let (exit_code, output) =
+                                    run_task(TaskKind::Script, &target, None, timeout.unwrap_or(30))
+                                        .await;
                                 let _ = msg_tx.send(AgentMsg::TaskResult {
                                     task_id,
                                     exit_code,
@@ -405,6 +752,9 @@ async fn run_session(cfg: &Config) -> Result<()> {
                                     scheduled_id: None,
                                 });
                             });
+                        }
+                        Ok(ServerToAgentMsg::RunTask { task_id, kind, target, cycles, .. }) => {
+                            tokio::spawn(stream_task(msg_tx.clone(), task_id, kind, target, cycles));
                         }
                         _ => {}
                     },
@@ -418,7 +768,19 @@ async fn run_session(cfg: &Config) -> Result<()> {
         })
     };
 
-    let tcping = tokio::spawn(tcping_loop(msg_tx.clone(), shared.clone()));
+    // region lookup is best effort and must never delay reporting
+    {
+        let msg_tx = msg_tx.clone();
+        let http = http.clone();
+        tokio::spawn(async move {
+            if let Some(code) = detect_region(&http).await {
+                let _ = msg_tx.send(AgentMsg::Region { code });
+            }
+        });
+    }
+
+    let pings = tokio::spawn(ping_scheduler(msg_tx.clone(), shared.clone(), http.clone()));
+    let tasks = tokio::spawn(custom_task_scheduler(msg_tx.clone(), shared.clone()));
     let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
 
     let metrics = metrics_loop(msg_tx.clone(), cfg);
@@ -426,7 +788,8 @@ async fn run_session(cfg: &Config) -> Result<()> {
     tokio::select! {
         _ = writer => anyhow::bail!("ws writer ended"),
         _ = reader => anyhow::bail!("ws reader ended"),
-        _ = tcping => anyhow::bail!("tcping loop ended"),
+        _ = pings => anyhow::bail!("ping scheduler ended"),
+        _ = tasks => anyhow::bail!("task scheduler ended"),
         _ = unlock => anyhow::bail!("unlock loop ended"),
         r = metrics => r.map_err(|e| anyhow::anyhow!("metrics loop: {e}")),
     }
