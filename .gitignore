@@ -4,3 +4,5 @@
 *.db-shm
 pharus.toml
 /dist
+.gstack/
+设计大纲.md
