@@ -1,17 +1,17 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt};
 use pharus_common::{
     AgentMsg, CustomTaskSpec, Metrics, MtrHop, PingKind, PingResult, PingTarget, PingTaskSpec,
     ServerToAgentMsg, SystemInfo, TaskKind, UnlockResult, PROTOCOL_VERSION,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind, System};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -138,7 +138,7 @@ async fn tcp_rtt(host: &str, port: u16) -> Option<f64> {
 }
 
 async fn http_rtt(client: &reqwest::Client, target: &str) -> Option<f64> {
-    let url = match target.starts_with("http") {
+    let url = match has_http_scheme(target) {
         true => target.to_string(),
         false => format!("https://{target}"),
     };
@@ -147,6 +147,10 @@ async fn http_rtt(client: &reqwest::Client, target: &str) -> Option<f64> {
         Ok(r) if r.status().as_u16() < 500 => Some(start.elapsed().as_secs_f64() * 1000.0),
         _ => None,
     }
+}
+
+fn has_http_scheme(target: &str) -> bool {
+    target.starts_with("http://") || target.starts_with("https://")
 }
 
 /// `(avg, min, max, loss)` — loss is the fraction of probes that got no reply.
@@ -263,7 +267,10 @@ async fn ping_scheduler(msg_tx: MsgTx, shared: Arc<Shared>, http: reqwest::Clien
         let mut changed = false;
 
         let targets = shared.tcping.lock().unwrap().clone();
-        if !targets.is_empty() && now >= legacy_at {
+        if targets.is_empty() && !legacy.is_empty() {
+            legacy.clear();
+            changed = true;
+        } else if !targets.is_empty() && now >= legacy_at {
             legacy_at = now + Duration::from_secs(10);
             legacy.clear();
             for t in targets {
@@ -281,7 +288,9 @@ async fn ping_scheduler(msg_tx: MsgTx, shared: Arc<Shared>, http: reqwest::Clien
         }
 
         let specs = shared.ping_tasks.lock().unwrap().clone();
+        let previous_results = task_results.len();
         task_results.retain(|id, _| specs.iter().any(|s| s.id == *id));
+        changed |= task_results.len() != previous_results;
         next_run.retain(|id, _| specs.iter().any(|s| s.id == *id));
         for spec in &specs {
             let at = *next_run.entry(spec.id).or_insert(now);
@@ -305,32 +314,46 @@ async fn ping_scheduler(msg_tx: MsgTx, shared: Arc<Shared>, http: reqwest::Clien
 
 async fn custom_task_scheduler(msg_tx: MsgTx, shared: Arc<Shared>) {
     let mut next_run: HashMap<i64, Instant> = HashMap::new();
+    let mut running = FuturesUnordered::new();
+    let mut running_ids = HashSet::new();
     let mut tick = interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
-        tick.tick().await;
-        let now = Instant::now();
-        let specs = shared.custom_tasks.lock().unwrap().clone();
-        next_run.retain(|id, _| specs.iter().any(|s| s.id == *id));
-        // interval 0 means the task only ever runs when an operator triggers it
-        for spec in specs.iter().filter(|s| s.interval > 0) {
-            let at = *next_run.entry(spec.id).or_insert(now);
-            if now < at {
-                continue;
+        tokio::select! {
+            biased;
+            Some(task_id) = running.next(), if !running.is_empty() => {
+                running_ids.remove(&task_id);
             }
-            next_run.insert(spec.id, now + Duration::from_secs(spec.interval.max(10)));
-            let msg_tx = msg_tx.clone();
-            let spec = spec.clone();
-            tokio::spawn(async move {
-                let (exit_code, output) =
-                    run_task(TaskKind::Script, &spec.command, None, spec.timeout).await;
-                let _ = msg_tx.send(AgentMsg::TaskResult {
-                    task_id: format!("sched-{}", spec.id),
-                    exit_code,
-                    output,
-                    scheduled_id: Some(spec.id),
-                });
-            });
+            _ = tick.tick() => {
+                let now = Instant::now();
+                let specs = shared.custom_tasks.lock().unwrap().clone();
+                next_run.retain(|id, _| specs.iter().any(|s| s.id == *id));
+                // interval 0 means the task only ever runs when an operator triggers it
+                for spec in specs.iter().filter(|s| s.interval > 0) {
+                    let at = *next_run.entry(spec.id).or_insert(now);
+                    if now < at {
+                        continue;
+                    }
+                    next_run.insert(spec.id, now + Duration::from_secs(spec.interval.max(10)));
+                    if !running_ids.insert(spec.id) {
+                        warn!(task_id = spec.id, "scheduled task still running; skipping tick");
+                        continue;
+                    }
+                    let msg_tx = msg_tx.clone();
+                    let spec = spec.clone();
+                    running.push(async move {
+                        let (exit_code, output) =
+                            run_task(TaskKind::Script, &spec.command, None, spec.timeout).await;
+                        let _ = msg_tx.send(AgentMsg::TaskResult {
+                            task_id: format!("sched-{}", spec.id),
+                            exit_code,
+                            output,
+                            scheduled_id: Some(spec.id),
+                        });
+                        spec.id
+                    });
+                }
+            }
         }
     }
 }
@@ -490,7 +513,76 @@ fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tok
             c
         }
     };
-    Some(tokio::process::Command::from(cmd))
+    let mut cmd = tokio::process::Command::from(cmd);
+    if kind == TaskKind::Ping {
+        cmd.env("LC_ALL", "C").env("LANG", "C");
+    }
+    Some(cmd)
+}
+
+const TASK_OUTPUT_CAP: usize = 32 * 1024;
+const TASK_OUTPUT_TRUNCATED: &str = "\n... (truncated)";
+
+#[derive(Default)]
+struct TaskOutputBuffer {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
+}
+
+impl TaskOutputBuffer {
+    fn append(&mut self, bytes: &[u8], stderr: bool) {
+        let used = self.stdout.len().saturating_add(self.stderr.len());
+        let kept = bytes.len().min(TASK_OUTPUT_CAP.saturating_sub(used));
+        if stderr {
+            self.stderr.extend_from_slice(&bytes[..kept]);
+        } else {
+            self.stdout.extend_from_slice(&bytes[..kept]);
+        }
+        self.truncated |= kept < bytes.len();
+    }
+}
+
+async fn read_task_output<R>(
+    mut reader: R,
+    output: Arc<Mutex<TaskOutputBuffer>>,
+    stderr: bool,
+) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(());
+        }
+        output.lock().unwrap().append(&chunk[..read], stderr);
+    }
+}
+
+fn truncate_to_char_boundary(text: &mut String, max: usize) -> bool {
+    if text.len() <= max {
+        return false;
+    }
+    let new_len = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|&index| index <= max)
+        .last()
+        .unwrap_or(0);
+    text.truncate(new_len);
+    true
+}
+
+fn task_output_text(output: &TaskOutputBuffer) -> String {
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let text_truncated = truncate_to_char_boundary(&mut text, TASK_OUTPUT_CAP);
+    if output.truncated || text_truncated {
+        text.push_str(TASK_OUTPUT_TRUNCATED);
+    }
+    text
 }
 
 async fn run_task(
@@ -503,22 +595,40 @@ async fn run_task(
         return (-1, "mtr is not supported on Windows agents".into());
     };
     let timeout = timeout.clamp(1, 600);
-    match tokio::time::timeout(Duration::from_secs(timeout), cmd.output()).await {
-        Ok(Ok(o)) => {
-            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            if !stderr.is_empty() {
-                text.push_str(&stderr);
-            }
-            const MAX: usize = 32 * 1024;
-            if text.len() > MAX {
-                text.truncate(MAX);
-                text.push_str("\n... (truncated)");
-            }
-            (o.status.code().unwrap_or(-1), text)
+    cmd.kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return (-1, format!("failed to run: {e}")),
+    };
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill().await;
+        return (-1, "failed to run: unable to capture task output".into());
+    };
+
+    let output = Arc::new(Mutex::new(TaskOutputBuffer::default()));
+    let execution = async {
+        let (status, _, _) = tokio::try_join!(
+            child.wait(),
+            read_task_output(stdout, output.clone(), false),
+            read_task_output(stderr, output.clone(), true),
+        )?;
+        Ok::<_, std::io::Error>(status)
+    };
+    match tokio::time::timeout(Duration::from_secs(timeout), execution).await {
+        Ok(Ok(status)) => {
+            let text = task_output_text(&output.lock().unwrap());
+            (status.code().unwrap_or(-1), text)
         }
-        Ok(Err(e)) => (-1, format!("failed to run: {e}")),
-        Err(_) => (-1, format!("task timed out after {timeout}s")),
+        Ok(Err(e)) => {
+            let _ = child.kill().await;
+            (-1, format!("failed to run: {e}"))
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            (-1, format!("task timed out after {timeout}s"))
+        }
     }
 }
 
@@ -666,6 +776,16 @@ async fn detect_region(client: &reqwest::Client) -> Option<String> {
 
 /* ---------- session ---------- */
 
+struct AbortTasksOnDrop(Vec<tokio::task::AbortHandle>);
+
+impl Drop for AbortTasksOnDrop {
+    fn drop(&mut self) {
+        for handle in &self.0 {
+            handle.abort();
+        }
+    }
+}
+
 async fn run_session(cfg: &Config) -> Result<()> {
     info!(server = %cfg.server, "connecting");
     let (ws, _) = connect_async(&cfg.server).await.context("ws connect failed")?;
@@ -782,6 +902,16 @@ async fn run_session(cfg: &Config) -> Result<()> {
     let pings = tokio::spawn(ping_scheduler(msg_tx.clone(), shared.clone(), http.clone()));
     let tasks = tokio::spawn(custom_task_scheduler(msg_tx.clone(), shared.clone()));
     let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
+    // Whichever task ends first aborts the session, and the rest would otherwise
+    // keep running against a socket nobody reads while the next attempt opens a
+    // second one.
+    let _session = AbortTasksOnDrop(vec![
+        writer.abort_handle(),
+        reader.abort_handle(),
+        pings.abort_handle(),
+        tasks.abort_handle(),
+        unlock.abort_handle(),
+    ]);
 
     let metrics = metrics_loop(msg_tx.clone(), cfg);
 
@@ -872,5 +1002,38 @@ async fn main() -> Result<()> {
         }
         sleep(Duration::from_secs(backoff)).await;
         backoff = (backoff * 2).min(30);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf8_truncation_uses_previous_char_boundary() {
+        let max = 32 * 1024;
+        let mut text = "a".repeat(max - 1);
+        text.push('界');
+
+        assert!(truncate_to_char_boundary(&mut text, max));
+        assert_eq!(text.len(), max - 1);
+    }
+
+    #[test]
+    fn http_scheme_requires_separator() {
+        assert!(has_http_scheme("http://example.com"));
+        assert!(has_http_scheme("https://example.com"));
+        assert!(!has_http_scheme("httpbin.org"));
+        assert!(!has_http_scheme("http.example.com"));
+    }
+
+    #[test]
+    fn task_output_buffer_caps_combined_streams() {
+        let mut output = TaskOutputBuffer::default();
+        output.append(&vec![b'a'; TASK_OUTPUT_CAP], false);
+        output.append(b"stderr", true);
+
+        assert_eq!(output.stdout.len() + output.stderr.len(), TASK_OUTPUT_CAP);
+        assert!(output.truncated);
     }
 }
