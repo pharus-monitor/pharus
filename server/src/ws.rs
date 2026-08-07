@@ -158,15 +158,65 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                         }
                         state.broadcast(BrowserMsg::Unlock { agent_id, results });
                     }
-                    Ok(AgentMsg::TaskResult { task_id, .. }) => {
-                        // hand off to any admin handler waiting on this task
-                        if let Some(tx) = state.task_waiters.lock().unwrap().remove(&task_id) {
-                            let _ = tx.send(
-                                serde_json::from_str::<AgentMsg>(&msg)
-                                    .unwrap_or(AgentMsg::TaskResult { task_id: task_id.clone(), exit_code: -1, output: "parse error".into() }),
-                            );
+                    Ok(AgentMsg::TaskResult { task_id, exit_code, output, scheduled_id }) => {
+                        match scheduled_id {
+                            // periodic run of a stored task: persist it
+                            Some(id) => {
+                                let db = state.db.lock().unwrap();
+                                if let Err(e) =
+                                    crate::db::insert_task_result(&db, id, agent_id, exit_code, &output)
+                                {
+                                    warn!(agent_id, task_id = id, error = %e, "task result insert failed");
+                                }
+                            }
+                            // one-shot run: hand off to the admin handler waiting on it
+                            None => {
+                                if let Some(tx) = state.task_waiters.lock().unwrap().remove(&task_id) {
+                                    let _ = tx.send(AgentMsg::TaskResult {
+                                        task_id,
+                                        exit_code,
+                                        output,
+                                        scheduled_id: None,
+                                    });
+                                }
+                            }
                         }
                     }
+                    Ok(AgentMsg::Region { code }) => {
+                        // a manual override always wins over agent-side detection
+                        let manual = {
+                            let db = state.db.lock().unwrap();
+                            crate::db::region_source(&db, agent_id)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|s| s == "manual")
+                        };
+                        if !manual {
+                            if let Some(code) = crate::regions::normalize(&code) {
+                                let region = crate::db::make_region(&code, "auto");
+                                {
+                                    let db = state.db.lock().unwrap();
+                                    if let Err(e) =
+                                        crate::db::set_region(&db, agent_id, Some(&code), "auto")
+                                    {
+                                        warn!(agent_id, error = %e, "region update failed");
+                                    }
+                                }
+                                {
+                                    let mut agents = state.agents.write().unwrap();
+                                    if let Some(a) = agents.get_mut(&agent_id) {
+                                        a.region = Some(region.clone());
+                                    }
+                                }
+                                state.broadcast(BrowserMsg::RegionUpdate {
+                                    agent_id,
+                                    region: Some(region),
+                                });
+                            }
+                        }
+                    }
+                    // relayed to browsers by the diagnostics module
+                    Ok(AgentMsg::CmdOutput { .. }) | Ok(AgentMsg::MtrResult { .. }) => {}
                     Ok(AgentMsg::Auth { .. }) => {
                         warn!(agent_id, "unexpected re-auth, dropping");
                         break;

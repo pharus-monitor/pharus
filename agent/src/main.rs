@@ -143,7 +143,14 @@ async fn tcping_loop(msg_tx: MsgTx, shared: Arc<Shared>) {
         let mut results = Vec::with_capacity(targets.len());
         for t in targets {
             let rtt = tcp_rtt(&t.host, t.port).await;
-            results.push(PingResult { label: t.label, rtt_ms: rtt });
+            results.push(PingResult {
+                label: t.label,
+                rtt_ms: rtt,
+                task_id: None,
+                rtt_min: rtt,
+                rtt_max: rtt,
+                loss: if rtt.is_some() { 0.0 } else { 1.0 },
+            });
         }
         if msg_tx.send(AgentMsg::Ping { results }).is_err() {
             return;
@@ -387,11 +394,16 @@ async fn run_session(cfg: &Config) -> Result<()> {
                             info!(targets = tcping.len(), "tcping config updated");
                             *shared.tcping.lock().unwrap() = tcping;
                         }
-                        Ok(ServerToAgentMsg::RunTask { task_id, kind, target }) => {
+                        Ok(ServerToAgentMsg::RunTask { task_id, kind, target, .. }) => {
                             let msg_tx = msg_tx.clone();
                             tokio::spawn(async move {
                                 let (exit_code, output) = run_task(kind, &target).await;
-                                let _ = msg_tx.send(AgentMsg::TaskResult { task_id, exit_code, output });
+                                let _ = msg_tx.send(AgentMsg::TaskResult {
+                                    task_id,
+                                    exit_code,
+                                    output,
+                                    scheduled_id: None,
+                                });
                             });
                         }
                         _ => {}

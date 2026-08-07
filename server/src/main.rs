@@ -1,6 +1,10 @@
 mod admin;
+mod alerts;
 mod billing;
+mod crypto;
 mod db;
+mod notify;
+mod regions;
 mod state;
 mod ws;
 

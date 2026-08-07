@@ -1,4 +1,6 @@
-use pharus_common::{AgentSnapshot, BrowserMsg, Metrics, PingResult, SystemInfo, TrafficUsage, UnlockResult};
+use pharus_common::{
+    AgentSnapshot, BrowserMsg, Metrics, PingResult, Region, SystemInfo, TrafficUsage, UnlockResult,
+};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,6 +28,9 @@ pub struct AgentState {
     pub traffic: TrafficState,
     pub pings: Vec<PingResult>,
     pub unlock: Vec<UnlockResult>,
+    pub region: Option<Region>,
+    /// Diagnostics enabled for this agent after merging global and per-agent settings.
+    pub features: Vec<String>,
     /// Channel to push server→agent messages onto the live socket.
     /// None when the agent is offline.
     pub agent_tx: Option<mpsc::UnboundedSender<pharus_common::ServerToAgentMsg>>,
@@ -47,6 +52,8 @@ impl AgentState {
             }),
             pings: self.pings.clone(),
             unlock: self.unlock.clone(),
+            region: self.region.clone(),
+            features: self.features.clone(),
         }
     }
 }
