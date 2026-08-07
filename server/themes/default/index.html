@@ -33,6 +33,10 @@
         <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
       </div>
       <div class="header-right">
+        <button id="group-toggle" class="view-toggle" type="button" aria-pressed="true" data-i18n-aria="region.toggle" aria-label="按区域分组">
+          <span class="view-toggle-dot"></span>
+          <span data-i18n="region.grouped">按区域分组</span>
+        </button>
         <button id="admin-btn" class="icon-btn" hidden data-i18n-aria="admin.manage" aria-label="Admin mode">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </button>
@@ -78,6 +82,107 @@
         <span data-i18n="empty.hintAfter">to register your first server</span>
       </p>
     </div>
+
+    <div class="feature-grid" id="feature-grid">
+      <section class="feature-panel" id="ping-panel">
+        <div class="panel-head">
+          <div>
+            <h2 data-i18n="ping.title">延迟历史</h2>
+            <p data-i18n="ping.subtitle">平均往返延迟与丢包趋势</p>
+          </div>
+        </div>
+        <div class="panel-controls">
+          <label class="field compact">
+            <span data-i18n="common.agent">主机</span>
+            <select id="ping-agent"></select>
+          </label>
+          <label class="field compact">
+            <span data-i18n="ping.task">探测任务</span>
+            <select id="ping-task"><option value="" data-i18n="ping.allTasks">全部任务</option></select>
+          </label>
+          <label class="field compact">
+            <span data-i18n="common.range">时间范围</span>
+            <select id="ping-range">
+              <option value="1h" data-i18n="range.1h">1 小时</option>
+              <option value="6h" data-i18n="range.6h">6 小时</option>
+              <option value="24h" selected data-i18n="range.24h">24 小时</option>
+              <option value="7d" data-i18n="range.7d">7 天</option>
+            </select>
+          </label>
+        </div>
+        <p class="panel-message" id="ping-message" role="status"></p>
+        <div class="chart-wrap" id="ping-chart-wrap">
+          <canvas id="ping-chart" role="img" data-i18n-aria="ping.chartAria" aria-label="延迟历史折线图"></canvas>
+        </div>
+        <div class="chart-legend" id="ping-legend"></div>
+        <div class="loss-summary" id="ping-loss"></div>
+      </section>
+
+      <section class="feature-panel" id="diag-panel">
+        <div class="panel-head">
+          <div>
+            <h2 data-i18n="diag.title">网络诊断</h2>
+            <p data-i18n="diag.subtitle">Looking Glass 与 MTR 流式输出</p>
+          </div>
+        </div>
+        <div class="panel-controls diag-controls">
+          <label class="field compact">
+            <span data-i18n="common.agent">主机</span>
+            <select id="diag-agent"></select>
+          </label>
+          <label class="field compact target-field">
+            <span data-i18n="diag.target">目标地址</span>
+            <input id="diag-target" type="text" inputmode="url" placeholder="example.com / 1.1.1.1" data-i18n-placeholder="diag.targetPlaceholder" />
+          </label>
+          <label class="field compact cycles-field">
+            <span data-i18n="diag.cycles">MTR 次数</span>
+            <input id="diag-cycles" type="number" min="1" max="100" value="10" />
+          </label>
+        </div>
+        <div class="panel-actions diag-actions">
+          <button class="btn" id="diag-ping" type="button" data-feature="lg" data-i18n="diag.ping">Ping</button>
+          <button class="btn" id="diag-traceroute" type="button" data-feature="lg" data-i18n="diag.traceroute">路由追踪</button>
+          <button class="btn" id="diag-mtr" type="button" data-feature="mtr" data-i18n="diag.mtr">MTR</button>
+        </div>
+        <p class="panel-message error" id="diag-error" role="alert" hidden></p>
+        <div class="diag-sessions" id="diag-sessions"></div>
+        <p class="panel-message" id="diag-empty" data-i18n="diag.empty">尚未运行诊断</p>
+      </section>
+
+      <section class="feature-panel feature-wide" id="streaming-panel">
+        <div class="panel-head panel-head-inline">
+          <div>
+            <h2 data-i18n="streaming.title">流媒体检测</h2>
+            <p data-i18n="streaming.subtitle">查看服务可用性与解锁状态</p>
+          </div>
+          <label class="field compact inline-field">
+            <span data-i18n="common.agent">主机</span>
+            <select id="streaming-agent"></select>
+          </label>
+        </div>
+        <p class="panel-message" id="streaming-message" role="status"></p>
+        <div class="service-results" id="streaming-results"></div>
+      </section>
+    </div>
+
+    <section class="admin-panel" id="admin-panel" hidden>
+      <div class="admin-panel-head">
+        <div>
+          <h2 data-i18n="admin.console">管理中心</h2>
+          <p data-i18n="admin.consoleHint">配置告警、通知、任务、区域和功能开关</p>
+        </div>
+      </div>
+      <nav class="admin-tabs" aria-label="管理页面" data-i18n-aria="admin.navAria">
+        <button class="admin-tab active" type="button" data-admin-view="alerts" data-i18n="admin.alerts">告警规则</button>
+        <button class="admin-tab" type="button" data-admin-view="channels" data-i18n="admin.channels">通知渠道</button>
+        <button class="admin-tab" type="button" data-admin-view="pingTasks" data-i18n="admin.pingTasks">Ping 任务</button>
+        <button class="admin-tab" type="button" data-admin-view="tasks" data-i18n="admin.tasks">自定义任务</button>
+        <button class="admin-tab" type="button" data-admin-view="regions" data-i18n="admin.regions">区域设置</button>
+        <button class="admin-tab" type="button" data-admin-view="features" data-i18n="admin.features">功能开关</button>
+      </nav>
+      <p class="panel-message error" id="admin-error" role="alert" hidden></p>
+      <div id="admin-content"></div>
+    </section>
   </main>
 
   <template id="card-tpl">
@@ -87,7 +192,10 @@
           <h2 data-f="name">—</h2>
           <p data-f="os">—</p>
         </div>
-        <span class="status-pill" data-f="status"><span class="dot"></span>Offline</span>
+        <div class="card-badges">
+          <span class="region-pill" data-f="region" hidden></span>
+          <span class="status-pill" data-f="status"><span class="dot"></span>Offline</span>
+        </div>
       </div>
 
       <div class="card-body">
@@ -165,6 +273,24 @@
           <div class="kv billing-edit-kv"><button class="edit-btn" data-f="editBtn" hidden data-i18n="admin.edit">Edit</button></div>
         </div>
       </div>
+
+      <div data-f="pingSection" hidden>
+        <div class="divider"></div>
+        <div class="mini-head"><span data-i18n="ping.current">当前延迟</span></div>
+        <div class="result-chips" data-f="pings"></div>
+      </div>
+
+      <div data-f="unlockSection" hidden>
+        <div class="divider"></div>
+        <div class="mini-head"><span data-i18n="streaming.current">流媒体状态</span></div>
+        <div class="result-chips" data-f="unlock"></div>
+      </div>
+
+      <div class="card-actions">
+        <button class="edit-btn" type="button" data-f="pingBtn" data-i18n="ping.open">延迟历史</button>
+        <button class="edit-btn" type="button" data-f="diagBtn" data-i18n="diag.open">网络诊断</button>
+        <button class="edit-btn" type="button" data-f="streamBtn" data-i18n="streaming.open">流媒体</button>
+      </div>
     </article>
   </template>
 
@@ -236,6 +362,24 @@
     </div>
   </div>
 
+  <div class="modal-mask" id="entity-modal" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h3 id="entity-title">—</h3>
+        <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
+      </div>
+      <form id="entity-form">
+        <div id="entity-fields"></div>
+        <p class="modal-err" id="entity-err" hidden></p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="entity-cancel" type="button" data-i18n="admin.cancel">取消</button>
+          <button class="btn primary" id="entity-save" type="submit" data-i18n="admin.save">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
