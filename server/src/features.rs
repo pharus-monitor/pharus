@@ -109,6 +109,9 @@ pub fn refresh_all(state: &SharedState) {
 
     for (agent_id, features) in changed {
         state.broadcast(BrowserMsg::FeaturesUpdate { agent_id, features });
+        // Re-sync so an agent that just lost `ping`/`tasks` stops running them
+        // instead of waiting for its next reconnect.
+        state.push_tasks(agent_id);
     }
 }
 
@@ -128,6 +131,7 @@ pub fn refresh_agent(state: &SharedState, agent_id: i64) -> Vec<String> {
         agent_id,
         features: features.clone(),
     });
+    state.push_tasks(agent_id);
     features
 }
 

@@ -132,6 +132,9 @@ async fn ping_history(
 }
 
 async fn streaming(State(state): State<SharedState>, Path(agent_id): Path<i64>) -> Response {
+    if !features::enabled(&state, agent_id, "streaming") {
+        return err(StatusCode::FORBIDDEN, "该功能已被管理员关闭");
+    }
     // Prefer the live in-memory results; fall back to the last persisted run so
     // the panel is not empty while an agent is offline.
     let live = {
@@ -163,6 +166,9 @@ fn diag_response(result: Result<String, diag::DiagError>) -> Response {
         Err(diag::DiagError::AgentOffline) => err(StatusCode::CONFLICT, "节点当前离线"),
         Err(diag::DiagError::BadTarget) => {
             err(StatusCode::UNPROCESSABLE_ENTITY, "目标地址不合法")
+        }
+        Err(diag::DiagError::TooManyRequests) => {
+            err(StatusCode::TOO_MANY_REQUESTS, "诊断请求过于频繁，请稍后再试")
         }
     }
 }

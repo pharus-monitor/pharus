@@ -1,6 +1,6 @@
 use crate::api::err;
 use crate::state::SharedState;
-use crate::{billing, crypto, db, features, notify, regions};
+use crate::{billing, crypto, db, diag, features, notify, regions};
 use axum::{
     extract::{Path, Query, Request, State},
     http::StatusCode,
@@ -261,16 +261,33 @@ fn yes() -> bool {
     true
 }
 
+/// A ping target ends up as `ping` argv, a TCP connect host, or a reqwest URL,
+/// so each kind gets the validation matching where it actually lands.
+fn valid_ping_target(kind: &str, target: &str) -> bool {
+    if kind == "http" {
+        if let Some(rest) = target
+            .strip_prefix("http://")
+            .or_else(|| target.strip_prefix("https://"))
+        {
+            return !rest.is_empty()
+                && target.len() <= 2048
+                && !target.chars().any(|c| c.is_whitespace() || c.is_control());
+        }
+    }
+    diag::valid_target(target)
+}
+
 impl PingTaskBody {
     fn validate(self) -> Result<db::PingTaskRow, String> {
         if self.label.trim().is_empty() {
             return Err("label is required".into());
         }
-        if self.target.trim().is_empty() {
-            return Err("target is required".into());
-        }
         if db::ping_kind_from_str(&self.kind).is_none() {
             return Err("kind must be icmp, tcp or http".into());
+        }
+        let target = self.target.trim().to_string();
+        if !valid_ping_target(&self.kind, &target) {
+            return Err("target must be a hostname, IP address or http(s) URL".into());
         }
         if self.kind == "tcp" && self.port.is_none() {
             return Err("tcp probes require a port".into());
@@ -286,7 +303,7 @@ impl PingTaskBody {
             agent_id: self.agent_id,
             label: self.label,
             kind: self.kind,
-            target: self.target,
+            target,
             port: self.port,
             interval_sec: self.interval_sec,
             probe_count: self.probe_count,
@@ -943,4 +960,29 @@ async fn update_billing(
         "traffic": traffic_usage,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_ping_target;
+
+    #[test]
+    fn icmp_and_tcp_targets_must_be_hosts() {
+        assert!(valid_ping_target("icmp", "1.1.1.1"));
+        assert!(valid_ping_target("tcp", "example.com"));
+        assert!(!valid_ping_target("icmp", "-I eth0"));
+        assert!(!valid_ping_target("tcp", "example.com; id"));
+        assert!(!valid_ping_target("icmp", "https://example.com"));
+    }
+
+    #[test]
+    fn http_targets_may_be_a_url_or_a_bare_host() {
+        assert!(valid_ping_target("http", "https://example.com/health?x=1"));
+        assert!(valid_ping_target("http", "http://example.com"));
+        // The agent prefixes a scheme itself when the target is a bare host.
+        assert!(valid_ping_target("http", "example.com"));
+        assert!(!valid_ping_target("http", "https://exa mple.com"));
+        assert!(!valid_ping_target("http", "https://"));
+        assert!(!valid_ping_target("http", "ftp://example.com"));
+    }
 }

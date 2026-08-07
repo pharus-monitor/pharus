@@ -211,13 +211,22 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             }
                             // one-shot run: hand off to the admin handler waiting on it
                             None => {
-                                if let Some(tx) = state.task_waiters.lock().unwrap().remove(&task_id) {
-                                    let _ = tx.send(AgentMsg::TaskResult {
-                                        task_id,
-                                        exit_code,
-                                        output,
-                                        scheduled_id: None,
-                                    });
+                                let waiter =
+                                    state.task_waiters.lock().unwrap().remove(&task_id);
+                                match waiter {
+                                    Some(tx) => {
+                                        let _ = tx.send(AgentMsg::TaskResult {
+                                            task_id,
+                                            exit_code,
+                                            output,
+                                            scheduled_id: None,
+                                        });
+                                    }
+                                    None => {
+                                        crate::diag::relay_legacy_result(
+                                            &state, agent_id, task_id, exit_code, output,
+                                        );
+                                    }
                                 }
                             }
                         }

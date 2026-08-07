@@ -17,17 +17,28 @@ pub struct DiagPending {
     /// "ping" | "traceroute" | "mtr"
     pub kind: String,
     pub started: i64,
+    /// Output bytes relayed so far, so a misbehaving agent cannot stream
+    /// without end.
+    pub relayed: usize,
 }
 
 /// Requests older than this are assumed dead and dropped.
 const PENDING_TTL: i64 = 300;
 const MAX_TARGET_LEN: usize = 255;
+/// These endpoints are public, so the only thing standing between an anonymous
+/// visitor and unlimited `ping`/`mtr` processes on every agent is this cap.
+const MAX_IN_FLIGHT_PER_AGENT: usize = 4;
+const MAX_IN_FLIGHT_TOTAL: usize = 64;
+/// The agent caps its own output, but a compromised agent is exactly the case
+/// this guards against, so the server counts the bytes itself.
+const MAX_RELAY_BYTES: usize = 256 * 1024;
 
 #[derive(Debug)]
 pub enum DiagError {
     FeatureDisabled,
     AgentOffline,
     BadTarget,
+    TooManyRequests,
 }
 
 fn now() -> i64 {
@@ -40,7 +51,7 @@ fn now() -> i64 {
 /// The target is passed to `ping`/`traceroute`/`mtr` as an argv entry, so shell
 /// metacharacters cannot escape — but a leading `-` would still be read as a
 /// flag. Restrict to what a hostname or IP literal can contain.
-fn valid_target(target: &str) -> bool {
+pub fn valid_target(target: &str) -> bool {
     !target.is_empty()
         && target.len() <= MAX_TARGET_LEN
         && !target.starts_with('-')
@@ -83,12 +94,19 @@ fn dispatch(
         let mut pending = state.diag_pending.lock().unwrap();
         let cutoff = now() - PENDING_TTL;
         pending.retain(|_, p| p.started >= cutoff);
+        if pending.len() >= MAX_IN_FLIGHT_TOTAL
+            || pending.values().filter(|p| p.agent_id == agent_id).count()
+                >= MAX_IN_FLIGHT_PER_AGENT
+        {
+            return Err(DiagError::TooManyRequests);
+        }
         pending.insert(
             request_id.clone(),
             DiagPending {
                 agent_id,
                 kind: kind.to_string(),
                 started: now(),
+                relayed: 0,
             },
         );
     }
@@ -132,19 +150,33 @@ pub fn start_mtr(
 }
 
 fn take_pending(state: &SharedState, request_id: &str, agent_id: i64, done: bool) -> Option<String> {
+    take_pending_bytes(state, request_id, agent_id, done, 0).map(|(kind, _)| kind)
+}
+
+/// Returns the request kind and whether the relay budget just ran out, in which
+/// case the caller must close the stream out itself.
+fn take_pending_bytes(
+    state: &SharedState,
+    request_id: &str,
+    agent_id: i64,
+    done: bool,
+    bytes: usize,
+) -> Option<(String, bool)> {
     let mut pending = state.diag_pending.lock().unwrap();
-    let entry = pending.get(request_id)?;
+    let entry = pending.get_mut(request_id)?;
     // A stale or spoofed request_id must not let one agent inject output into
     // another agent's diagnostic stream.
     if entry.agent_id != agent_id {
         warn!(agent_id, request_id, "diag frame from the wrong agent, dropping");
         return None;
     }
+    entry.relayed = entry.relayed.saturating_add(bytes);
+    let over_budget = entry.relayed > MAX_RELAY_BYTES;
     let kind = entry.kind.clone();
-    if done {
+    if done || over_budget {
         pending.remove(request_id);
     }
-    Some(kind)
+    Some((kind, over_budget))
 }
 
 /// Relay one incremental output frame from the agent to the browsers.
@@ -157,9 +189,25 @@ pub fn relay_output(
     done: bool,
     exit_code: Option<i32>,
 ) {
-    let Some(kind) = take_pending(state, &request_id, agent_id, done) else {
+    let Some((kind, over_budget)) =
+        take_pending_bytes(state, &request_id, agent_id, done, data.len())
+    else {
         return;
     };
+    if over_budget && !done {
+        warn!(agent_id, request_id, "diag output budget exceeded, closing stream");
+        state.broadcast(BrowserMsg::DiagResult {
+            request_id,
+            agent_id,
+            kind,
+            stream: Some("stderr".into()),
+            data: Some("output limit exceeded\n".into()),
+            result: None,
+            done: true,
+            exit_code: Some(-1),
+        });
+        return;
+    }
     state.broadcast(BrowserMsg::DiagResult {
         request_id,
         agent_id,
@@ -169,6 +217,31 @@ pub fn relay_output(
         result: None,
         done,
         exit_code,
+    });
+}
+
+/// An agent predating `DiagOutput` answers a dispatched request with a plain
+/// buffered `TaskResult`. Close the browser's request out with it instead of
+/// dropping the reply. Does nothing when the id belongs to something else.
+pub fn relay_legacy_result(
+    state: &SharedState,
+    agent_id: i64,
+    request_id: String,
+    exit_code: i32,
+    output: String,
+) {
+    let Some(kind) = take_pending(state, &request_id, agent_id, true) else {
+        return;
+    };
+    state.broadcast(BrowserMsg::DiagResult {
+        request_id,
+        agent_id,
+        kind,
+        stream: Some("stdout".into()),
+        data: Some(output),
+        result: None,
+        done: true,
+        exit_code: Some(exit_code),
     });
 }
 

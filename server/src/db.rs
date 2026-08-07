@@ -567,13 +567,25 @@ pub fn delete_ping_task(conn: &Connection, id: i64) -> Result<usize> {
     Ok(conn.execute("DELETE FROM ping_tasks WHERE id = ?1", params![id])?)
 }
 
+/// The agent resends its *whole* ping result set whenever any single task
+/// re-probes, so a task on a long interval would otherwise get a duplicate row
+/// every time a faster task ticks. A task cannot produce two samples closer
+/// together than its own interval, so anything arriving sooner is a resend of
+/// one already stored. Value comparison would be wrong here: a target that
+/// stays down reports identical rows that must all be kept.
 pub fn insert_ping_history(conn: &Connection, agent_id: i64, p: &PingResult) -> Result<()> {
     let Some(task_id) = p.task_id else {
         return Ok(());
     };
     conn.execute(
         "INSERT INTO ping_history (agent_id, task_id, ts, rtt_avg, rtt_min, rtt_max, loss)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+         SELECT ?1,?2,?3,?4,?5,?6,?7
+         WHERE NOT EXISTS (
+           SELECT 1 FROM ping_history h
+           WHERE h.agent_id = ?1 AND h.task_id = ?2
+             AND h.ts > ?3 - COALESCE(
+               (SELECT MAX(t.interval_sec - 2, 1) FROM ping_tasks t WHERE t.id = ?2), 1)
+         )",
         params![agent_id, task_id, now_ts(), p.rtt_ms, p.rtt_min, p.rtt_max, p.loss],
     )?;
     Ok(())
@@ -1132,4 +1144,100 @@ pub fn update_channel(conn: &Connection, id: i64, c: &ChannelRow) -> Result<usiz
 
 pub fn delete_channel(conn: &Connection, id: i64) -> Result<usize> {
     Ok(conn.execute("DELETE FROM notification_channels WHERE id = ?1", params![id])?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(conn: &Connection, interval_sec: u64) -> i64 {
+        insert_ping_task(
+            conn,
+            &PingTaskRow {
+                id: 0,
+                agent_id: Some(1),
+                label: "cf".into(),
+                kind: "icmp".into(),
+                target: "1.1.1.1".into(),
+                port: None,
+                interval_sec,
+                probe_count: 3,
+                enabled: true,
+            },
+        )
+        .unwrap()
+    }
+
+    fn sample(task_id: i64, rtt: f64) -> PingResult {
+        PingResult {
+            label: "cf".into(),
+            rtt_ms: Some(rtt),
+            task_id: Some(task_id),
+            rtt_min: Some(rtt),
+            rtt_max: Some(rtt),
+            loss: 0.0,
+        }
+    }
+
+    fn stored(conn: &Connection, agent_id: i64) -> Vec<PingPoint> {
+        ping_history(conn, agent_id, None, 0, 100).unwrap()
+    }
+
+    #[test]
+    fn resent_snapshot_does_not_duplicate_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let id = task(&conn, 60);
+
+        // The agent resends its whole result set whenever any task ticks.
+        for _ in 0..5 {
+            insert_ping_history(&conn, 1, &sample(id, 12.0)).unwrap();
+        }
+        assert_eq!(stored(&conn, 1).len(), 1);
+    }
+
+    #[test]
+    fn a_genuinely_spaced_sample_is_kept() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let id = task(&conn, 60);
+
+        insert_ping_history(&conn, 1, &sample(id, 12.0)).unwrap();
+        conn.execute("UPDATE ping_history SET ts = ts - 60", []).unwrap();
+        insert_ping_history(&conn, 1, &sample(id, 13.0)).unwrap();
+
+        let rows = stored(&conn, 1);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].rtt_avg, Some(13.0));
+    }
+
+    #[test]
+    fn an_identical_down_sample_is_still_kept() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let id = task(&conn, 60);
+        let down = PingResult {
+            label: "cf".into(),
+            rtt_ms: None,
+            task_id: Some(id),
+            rtt_min: None,
+            rtt_max: None,
+            loss: 1.0,
+        };
+
+        insert_ping_history(&conn, 1, &down).unwrap();
+        conn.execute("UPDATE ping_history SET ts = ts - 60", []).unwrap();
+        insert_ping_history(&conn, 1, &down).unwrap();
+        assert_eq!(stored(&conn, 1).len(), 2);
+    }
+
+    #[test]
+    fn ad_hoc_results_without_a_task_are_not_stored() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+        let mut legacy = sample(0, 9.0);
+        legacy.task_id = None;
+        insert_ping_history(&conn, 1, &legacy).unwrap();
+        assert!(stored(&conn, 1).is_empty());
+    }
 }

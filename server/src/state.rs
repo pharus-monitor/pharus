@@ -79,6 +79,10 @@ impl AppState {
     /// Push an agent's current scheduled ping + custom task set over its live
     /// socket. Silently does nothing when the agent is offline; the set is
     /// pushed again on reconnect.
+    ///
+    /// A feature the admin turned off yields an empty list rather than a skipped
+    /// sync, because the agent replaces its whole task set on `TasksSync` — that
+    /// is what actually stops an already-running schedule.
     pub fn push_tasks(&self, agent_id: i64) {
         let loaded = {
             let conn = self.db.lock().unwrap();
@@ -92,16 +96,19 @@ impl AppState {
                 return;
             }
         };
-        let tx = {
+        let Some((tx, features)) = ({
             let agents = self.agents.read().unwrap();
-            agents.get(&agent_id).and_then(|a| a.agent_tx.clone())
+            agents
+                .get(&agent_id)
+                .and_then(|a| a.agent_tx.clone().map(|tx| (tx, a.features.clone())))
+        }) else {
+            return;
         };
-        if let Some(tx) = tx {
-            let _ = tx.send(pharus_common::ServerToAgentMsg::TasksSync {
-                ping_tasks,
-                custom_tasks,
-            });
-        }
+        let allows = |f: &str| features.iter().any(|have| have == f);
+        let _ = tx.send(pharus_common::ServerToAgentMsg::TasksSync {
+            ping_tasks: if allows("ping") { ping_tasks } else { Vec::new() },
+            custom_tasks: if allows("tasks") { custom_tasks } else { Vec::new() },
+        });
     }
 
     pub fn push_tasks_all(&self) {
