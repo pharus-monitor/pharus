@@ -730,6 +730,113 @@
       }).catch(showError);
     }
 
+    /* ---------- Host billing (per-agent cycle traffic / expiry / price) ---------- */
+    var BILLING_CURRENCY_SYMBOL = { CNY: '¥', USD: '$', EUR: '€' };
+
+    function billingPriceLabel(b) {
+      if (b.price == null || !b.currency) return '—';
+      var sym = BILLING_CURRENCY_SYMBOL[b.currency] || (b.currency + ' ');
+      return sym + b.price + (b.cycle ? ' · ' + t('billing.cycle.' + b.cycle) : '');
+    }
+
+    function openBillingForm(agent) {
+      var b = agent.billing || {};
+      openModal((agent.name || ('Agent #' + agent.agent_id)) + ' · ' + t('billing.manage'), function (root) {
+        var f = {};
+        f.resetDay = inputField('admin.resetDay', b.reset_day != null ? b.reset_day : '', { type: 'number', min: 1, max: 31 });
+        f.quotaGb = inputField('admin.quotaGb', b.quota_bytes != null ? Math.round(b.quota_bytes / 1073741824 * 100) / 100 : '', { type: 'number', min: 0 });
+        f.expiresOn = inputField('admin.expiresOn', b.expires_at ? window.Pharus.fmtDate(b.expires_at) : '', { type: 'date' });
+        f.price = inputField('admin.price', b.price != null ? b.price : '', { type: 'number', min: 0, step: '0.01' });
+        f.currency = selectField('admin.currency', [
+          { value: '', label: '—' }, { value: 'CNY', label: 'CNY' },
+          { value: 'USD', label: 'USD' }, { value: 'EUR', label: 'EUR' }
+        ], b.currency);
+        f.cycle = selectField('admin.cycle', [
+          { value: '', label: '—' },
+          { value: 'monthly', label: t('billing.cycle.monthly') },
+          { value: 'quarterly', label: t('billing.cycle.quarterly') },
+          { value: 'yearly', label: t('billing.cycle.yearly') }
+        ], b.cycle);
+        ['resetDay', 'quotaGb', 'expiresOn', 'price', 'currency', 'cycle'].forEach(function (k) { root.appendChild(f[k].el); });
+        modalSubmit = function () {
+          var body = {
+            reset_day: f.resetDay.input.value === '' ? null : parseInt(f.resetDay.input.value, 10),
+            quota_gb: f.quotaGb.input.value === '' ? null : parseFloat(f.quotaGb.input.value),
+            expires_on: f.expiresOn.input.value === '' ? null : f.expiresOn.input.value,
+            price: f.price.input.value === '' ? null : parseFloat(f.price.input.value),
+            currency: f.currency.input.value || null,
+            cycle: f.cycle.input.value || null
+          };
+          return options.request('/api/admin/agents/' + agent.agent_id + '/billing', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).then(function () { renderHostBilling(); });
+        };
+      });
+    }
+
+    function renderHostBilling() {
+      setLoading(); clearError();
+      loadAgents().then(function () {
+        if (!active || currentView !== 'hostBilling') return;
+        options.content.innerHTML = '';
+        options.content.appendChild(toolbar(t('billing.manage'), null));
+        var rows = adminAgents.map(function (agent) {
+          var b = agent.billing || {};
+          var expires = b.expires_at ? window.Pharus.fmtDate(b.expires_at) : '—';
+          var actions = editActions(function () { openBillingForm(agent); }, null);
+          return [
+            agent.name || ('Agent #' + agent.agent_id),
+            b.reset_day != null ? String(b.reset_day) : '—',
+            b.quota_bytes != null ? window.Pharus.fmtBytes(b.quota_bytes) : '—',
+            expires,
+            billingPriceLabel(b),
+            actions
+          ];
+        });
+        options.content.appendChild(makeTable(
+          [t('common.agent'), t('admin.resetDay'), t('billing.quota'), t('billing.expires'), t('billing.price'), t('common.actions')],
+          rows));
+      }).catch(showError);
+    }
+
+    /* ---------- Site settings (expiry alert window, …) ---------- */
+    function renderSettings() {
+      setLoading(); clearError();
+      options.request('/api/meta').then(function (meta) {
+        if (!active || currentView !== 'settings') return;
+        options.content.innerHTML = '';
+        options.content.appendChild(toolbar(t('admin.settings'), null));
+        var box = node('div', 'feature-defaults');
+        var days = inputField('settings.expiryDays', meta.expiry_alert_days || 3, { type: 'number', min: 1, max: 365 });
+        box.appendChild(days.el);
+        var status = node('span', 'inline-status');
+        var save = actionButton(t('admin.save'), function () {
+          var v = parseInt(days.input.value, 10);
+          if (!Number.isFinite(v) || v < 1 || v > 365) {
+            status.textContent = t('settings.expiryRange');
+            status.className = 'inline-status error';
+            return;
+          }
+          save.disabled = true;
+          status.textContent = t('common.saving');
+          options.request('/api/admin/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'expiry_alert_days', value: String(v) })
+          }).then(function () {
+            status.textContent = t('common.saved'); status.className = 'inline-status ok';
+          }).catch(function (error) {
+            status.textContent = t('common.error') + ': ' + error.message; status.className = 'inline-status error';
+          }).then(function () { save.disabled = false; });
+        }, 'btn primary');
+        box.appendChild(save);
+        box.appendChild(status);
+        options.content.appendChild(box);
+      }).catch(showError);
+    }
+
     function loadView() {
       if (!active) return;
       if (currentView === 'alerts') renderAlerts();
@@ -738,6 +845,8 @@
       else if (currentView === 'tasks') renderTasks();
       else if (currentView === 'regions') renderRegions();
       else if (currentView === 'features') renderFeatures();
+      else if (currentView === 'hostBilling') renderHostBilling();
+      else if (currentView === 'settings') renderSettings();
     }
 
     options.root.querySelectorAll('[data-admin-view]').forEach(function (tab) {
@@ -750,6 +859,9 @@
       });
     });
     document.getElementById('entity-cancel').addEventListener('click', closeModal);
+    options.modal.querySelectorAll('[data-close]').forEach(function (el) {
+      el.addEventListener('click', closeModal);
+    });
     options.form.addEventListener('submit', function (event) {
       event.preventDefault();
       if (!modalSubmit) return;

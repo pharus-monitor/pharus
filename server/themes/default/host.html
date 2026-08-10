@@ -17,6 +17,7 @@
         <p id="host-os">—</p>
       </div>
       <div class="header-right">
+        <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
         <a id="admin-link" class="admin-link" href="admin.html" hidden data-i18n="nav.admin">管理</a>
         <span id="conn" class="conn-badge conn-down" role="status">
           <span class="conn-dot"></span>Connecting…
@@ -28,6 +29,16 @@
   <main class="wrap main">
 
     <div id="host-card" class="host-card"></div>
+
+    <section class="hw-panel" id="hw-panel" hidden>
+      <div class="panel-head">
+        <div>
+          <h2 data-i18n="host.hardware">硬件信息</h2>
+          <p data-i18n="host.hardwareSub">CPU、内存与系统概览</p>
+        </div>
+      </div>
+      <div class="hw-grid" id="hw-grid"></div>
+    </section>
 
     <div class="feature-grid" id="feature-grid">
 
@@ -184,6 +195,20 @@
           <div class="meter-track"><div class="meter-fill traffic" data-f="trafficFill"></div></div>
         </div>
         <div class="kv-grid billing-kv">
+          <div class="kv">
+            <span class="k">
+              <svg viewBox="0 0 16 16" class="ico ico-down"><path d="M8 12.5 2.5 7h3V2h5v5h3z" fill="currentColor"/></svg>
+              <span data-i18n="kv.download">Download</span>
+            </span>
+            <span class="v" data-f="rxTotal">—</span>
+          </div>
+          <div class="kv">
+            <span class="k">
+              <svg viewBox="0 0 16 16" class="ico ico-up"><path d="M8 3.5 13.5 9h-3v5h-5V9h-3z" fill="currentColor"/></svg>
+              <span data-i18n="kv.upload">Upload</span>
+            </span>
+            <span class="v" data-f="txTotal">—</span>
+          </div>
           <div class="kv"><span class="k" data-i18n="billing.expires">Expires</span><span class="v" data-f="expires">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.price">Price</span><span class="v" data-f="price">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.resetDay">Reset day</span><span class="v" data-f="resetDay">—</span></div>

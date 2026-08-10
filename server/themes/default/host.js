@@ -68,6 +68,8 @@
       billing: P.field(node, 'billing'),
       trafficVal: P.field(node, 'trafficVal'),
       trafficFill: P.field(node, 'trafficFill'),
+      rxTotal: P.field(node, 'rxTotal'),
+      txTotal: P.field(node, 'txTotal'),
       expires: P.field(node, 'expires'),
       price: P.field(node, 'price'),
       resetDay: P.field(node, 'resetDay'),
@@ -121,12 +123,49 @@
     return b && (b.reset_day != null || b.quota_bytes != null || b.expires_at != null || b.price != null);
   }
 
+  function renderHardware() {
+    var info = entry.info;
+    var panel = document.getElementById('hw-panel');
+    var gridEl = document.getElementById('hw-grid');
+    panel.hidden = !info;
+    gridEl.innerHTML = '';
+    if (!info) return;
+    var items = [
+      [t('host.cpu'), info.cpu_model],
+      [t('host.cores'), String(info.cpu_cores)],
+      [t('host.memory'), info.mem_desc || (entry.data ? P.fmtBytes(entry.data.mem_total) : '—')],
+      [t('host.system'), info.os],
+      [t('host.kernel'), info.kernel],
+      [t('host.arch'), info.arch]
+    ];
+    if (info.virtualization) items.push([t('host.virt'), info.virtualization]);
+    items.forEach(function (item) {
+      var cell = document.createElement('div');
+      cell.className = 'hw-item';
+      var label = document.createElement('span');
+      label.className = 'hw-label';
+      label.textContent = item[0];
+      var value = document.createElement('span');
+      value.className = 'hw-value num';
+      value.textContent = item[1] || '—';
+      cell.appendChild(label);
+      cell.appendChild(value);
+      gridEl.appendChild(cell);
+    });
+  }
+
   function renderBilling() {
     var b = entry.billing;
     var tr = entry.traffic;
-    card.billing.hidden = !hasBilling(b);
+    card.billing.hidden = !(hasBilling(b) || (tr && (tr.rx_bytes || tr.tx_bytes)));
     if (card.billing.hidden) return;
     b = b || {};
+    tr = tr || {};
+
+    if (tr.rx_bytes || tr.tx_bytes) {
+      card.rxTotal.textContent = P.fmtBytes(tr.rx_bytes || 0);
+      card.txTotal.textContent = P.fmtBytes(tr.tx_bytes || 0);
+    }
 
     var used = tr ? (tr.rx_bytes || 0) + (tr.tx_bytes || 0) : 0;
     if (b.quota_bytes != null) {
@@ -199,6 +238,7 @@
     setStatus(entry.online);
     renderMetrics();
     renderBilling();
+    renderHardware();
     renderRegion();
     renderPings();
     renderUnlock();
@@ -651,6 +691,7 @@
 
   /* ---------- boot ---------- */
   P.ready().then(function () {
+    P.initTheme();
     P.connectStream(handleMessage);
     probeAdminLink();
   });

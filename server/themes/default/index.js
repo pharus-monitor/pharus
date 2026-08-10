@@ -12,7 +12,7 @@
   var statTotal = document.getElementById('stat-total');
   var statOnline = document.getElementById('stat-online');
   var statOffline = document.getElementById('stat-offline');
-  var statCpu = document.getElementById('stat-cpu');
+  var statExpiring = document.getElementById('stat-expiring');
   var statCost = document.getElementById('stat-cost');
   var groupToggle = document.getElementById('group-toggle');
   var adminLink = document.getElementById('admin-link');
@@ -199,23 +199,30 @@
     });
   }
 
+  var expiryAlertDays = 3;
+
   function renderHeader() {
-    var online = 0, cpuSum = 0, cpuCount = 0;
+    var online = 0;
+    var expiring = 0;
     var costs = {};
     state.forEach(function (a) {
       if (a.online) {
         online++;
-        if (a.data) { cpuSum += a.data.cpu_usage; cpuCount++; }
       }
       if (a.billing && a.billing.price != null && a.billing.currency) {
         var div = CYCLE_DIVISOR[a.billing.cycle] || 1;
         costs[a.billing.currency] = (costs[a.billing.currency] || 0) + a.billing.price / div;
       }
+      if (a.billing && a.billing.expires_at != null) {
+        var days = Math.ceil((a.billing.expires_at * 1000 - Date.now()) / 86400000);
+        if (days >= 0 && days <= expiryAlertDays) expiring++;
+      }
     });
     statTotal.textContent = state.size;
     statOnline.textContent = online;
     statOffline.textContent = state.size - online;
-    statCpu.textContent = cpuCount > 0 ? (cpuSum / cpuCount).toFixed(1) + '%' : '—';
+    statExpiring.textContent = expiring;
+    statExpiring.title = t('stats.expiringHint').replace('{n}', expiryAlertDays);
     var parts = [];
     ['CNY', 'USD', 'EUR'].forEach(function (c) {
       if (costs[c]) parts.push(CURRENCY_SYMBOL[c] + P.fmtAmount(costs[c]));
@@ -383,6 +390,8 @@
     // 404 = admin API disabled on this server; 401/200 = enabled
     P.requestJson('/api/meta').then(function (meta) {
       if (meta.admin_enabled) adminLink.hidden = false;
+      if (meta.expiry_alert_days) expiryAlertDays = meta.expiry_alert_days;
+      renderHeader();
     }).catch(function () {});
   }
 
@@ -394,6 +403,7 @@
 
   /* ---------- boot: language first, then live data ---------- */
   P.ready().then(function () {
+    P.initTheme();
     P.connectStream(handleMessage);
     probeAdminLink();
   });

@@ -17,6 +17,7 @@
         <p data-i18n="admin.subtitle">配置告警、通知、任务、区域和功能开关</p>
       </div>
       <div class="header-right">
+        <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
         <span id="conn" class="conn-badge conn-down" role="status">
           <span class="conn-dot"></span>Connecting…
         </span>
@@ -52,6 +53,8 @@
         <button class="admin-tab" type="button" data-admin-view="tasks" data-i18n="admin.tasks">自定义任务</button>
         <button class="admin-tab" type="button" data-admin-view="regions" data-i18n="admin.regions">区域设置</button>
         <button class="admin-tab" type="button" data-admin-view="features" data-i18n="admin.features">功能开关</button>
+        <button class="admin-tab" type="button" data-admin-view="hostBilling" data-i18n="admin.hostBilling">主机账单</button>
+        <button class="admin-tab" type="button" data-admin-view="settings" data-i18n="admin.settings">站点设置</button>
       </div>
       <p class="panel-message error" id="admin-error" role="alert" hidden></p>
       <div id="admin-content"></div>
@@ -166,6 +169,7 @@
       }
 
       function boot() {
+        P.initTheme();
         // keep a live agent list so feature/region choices can reflect current state
         P.connectStream(function (msg) {
           if (msg.type === 'snapshot') {

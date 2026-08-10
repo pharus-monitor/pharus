@@ -180,12 +180,48 @@
     connect();
   }
 
+  /* ---------- theme (dark / light / follow system) ---------- */
+  var THEME_MODES = ['dark', 'light', 'auto'];
+
+  function applyTheme(mode) {
+    var root = document.documentElement;
+    var systemLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    if (mode === 'light' || (mode === 'auto' && systemLight)) {
+      root.setAttribute('data-theme', 'light');
+    } else {
+      root.removeAttribute('data-theme'); // dark default
+    }
+  }
+
+  function initTheme() {
+    var mode = localStorage.getItem('pharus.theme') || 'auto';
+    applyTheme(mode);
+    var media = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+    if (media && media.addEventListener) {
+      media.addEventListener('change', function () {
+        if ((localStorage.getItem('pharus.theme') || 'auto') === 'auto') applyTheme('auto');
+      });
+    }
+    var btn = document.getElementById('theme-btn');
+    if (!btn) return;
+    var render = function () { btn.textContent = t('theme.' + mode); btn.setAttribute('data-i18n', 'theme.' + mode); };
+    btn.addEventListener('click', function () {
+      mode = THEME_MODES[(THEME_MODES.indexOf(mode) + 1) % THEME_MODES.length];
+      localStorage.setItem('pharus.theme', mode);
+      applyTheme(mode);
+      render();
+    });
+    render();
+  }
+
   window.Pharus = {
     t: t,
     ready: ready,
     applyStatics: applyStatics,
     detectLang: detectLang,
     loadLang: loadLang,
+    applyTheme: applyTheme,
+    initTheme: initTheme,
     fmtBytes: fmtBytes,
     fmtRate: fmtRate,
     fmtUptime: fmtUptime,

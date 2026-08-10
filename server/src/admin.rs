@@ -63,6 +63,7 @@ pub fn router(state: SharedState) -> Router<SharedState> {
             put(update_channel).delete(delete_channel),
         )
         .route("/api/admin/channels/:id/test", post(test_channel))
+        .route("/api/admin/settings", put(update_setting))
         .route_layer(middleware::from_fn_with_state(state, require_admin))
 }
 
@@ -81,6 +82,37 @@ async fn require_admin(State(state): State<SharedState>, req: Request, next: Nex
         return err(StatusCode::UNAUTHORIZED, "invalid admin token");
     }
     next.run(req).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SettingUpdate {
+    pub key: String,
+    pub value: String,
+}
+
+async fn update_setting(
+    State(state): State<SharedState>,
+    Json(body): Json<SettingUpdate>,
+) -> Response {
+    if body.key != "expiry_alert_days" {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "unknown setting key");
+    }
+    match body.value.parse::<i64>() {
+        Ok(v) if (1..=365).contains(&v) => {}
+        _ => {
+            return err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "expiry_alert_days must be a number within 1..=365",
+            )
+        }
+    }
+    {
+        let conn = state.db.lock().unwrap();
+        if let Err(e) = db::set_setting(&conn, &body.key, &body.value) {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
+    }
+    StatusCode::OK.into_response()
 }
 
 /// Token probe for the frontend: reaching this handler means the token is valid.

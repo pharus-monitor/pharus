@@ -44,7 +44,7 @@ fn now() -> i64 {
 }
 
 async fn meta(State(state): State<SharedState>) -> Response {
-    let (theme, enabled) = {
+    let (theme, enabled, expiry_days) = {
         let conn = state.db.lock().unwrap();
         let theme = db::get_setting(&conn, "current_theme")
             .ok()
@@ -56,13 +56,19 @@ async fn meta(State(state): State<SharedState>) -> Response {
             .filter(|f| *global.get(**f).unwrap_or(&true))
             .map(|f| (*f).to_string())
             .collect();
-        (theme, enabled)
+        let expiry_days = db::get_setting(&conn, "expiry_alert_days")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(3);
+        (theme, enabled, expiry_days)
     };
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "theme": theme,
         "features": enabled,
         "admin_enabled": state.admin_token.is_some(),
+        "expiry_alert_days": expiry_days,
     }))
     .into_response()
 }

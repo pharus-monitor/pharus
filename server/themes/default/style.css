@@ -49,6 +49,40 @@
   --ok: var(--emerald-400);
 }
 
+/* ---------- Light theme ----------
+   The dark values above are the default. A light override is applied either
+   explicitly (<html data-theme="light">) or, when the theme is set to follow
+   the system, by common.js setting data-theme="light" when the OS prefers it. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* slate neutrals shift dark-on-light for component text */
+  --slate-100: #0f172a;
+  --slate-200: #1e293b;
+  --slate-300: #334155;
+  --slate-400: #475569;
+  --slate-500: #64748b;
+  --slate-600: #94a3b8;
+
+  --abyss-950: #f3f5fa;
+  --abyss-900: #ffffff;
+  --abyss-850: #eef1f7;
+  --abyss-800: #e2e8f0;
+
+  --bg-page: var(--abyss-950);
+  --bg-surface: rgba(255, 255, 255, 0.84);
+  --bg-surface-hover: var(--abyss-850);
+  --border-subtle: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.16);
+  --text-primary: var(--slate-100);
+  --text-secondary: var(--slate-500);
+  --text-muted: var(--slate-600);
+  --accent: var(--beacon-500);
+  --ok: var(--emerald-400);
+}
+:root[data-theme="light"] .modal-mask { background: rgba(15, 23, 42, 0.45); }
+:root[data-theme="light"] body::before { background-image: none; }
+
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -528,3 +562,29 @@ body::before {
 }
 .admin-login-card h2 { margin: 0 0 0.25rem; font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .admin-login-hint { margin: 0 0 1rem; font-size: 12px; color: var(--text-muted); }
+
+/* ---------- Host hardware panel ---------- */
+.hw-panel {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.hw-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem 1.5rem;
+  margin-top: 0.75rem;
+}
+@media (min-width: 768px) { .hw-grid { grid-template-columns: repeat(3, 1fr); } }
+.hw-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(148, 163, 184, 0.06);
+}
+.hw-label { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.hw-value { font-size: 12px; font-weight: 500; color: var(--text-primary); overflow-wrap: anywhere; }

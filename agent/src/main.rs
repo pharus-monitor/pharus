@@ -74,7 +74,7 @@ impl Config {
     }
 }
 
-fn collect_sysinfo(sys: &System) -> SystemInfo {
+fn collect_sysinfo(sys: &System, mem_desc: Option<String>) -> SystemInfo {
     let cpu_model = sys
         .cpus()
         .first()
@@ -88,6 +88,61 @@ fn collect_sysinfo(sys: &System) -> SystemInfo {
         cpu_model,
         cpu_cores: sys.cpus().len(),
         virtualization: None,
+        mem_desc,
+    }
+}
+
+/// Best-effort memory module description, e.g. "Samsung 4800MHz". Runs once at
+/// first connect; a missing tool or missing permission yields None instead of
+/// failing the session.
+async fn collect_mem_desc() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let script = "(Get-CimInstance Win32_PhysicalMemory | Select-Object -First 1 | ForEach-Object { \"$($_.Manufacturer) $($_.ConfiguredClockSpeed)MHz\" })";
+        let out = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", script])
+                .output(),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    }
+    #[cfg(not(windows))]
+    {
+        let out = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::process::Command::new("dmidecode").args(["-t", "memory"]).output(),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut manufacturer = None;
+        let mut speed = None;
+        for line in text.lines() {
+            let l = line.trim();
+            if let Some(v) = l.strip_prefix("Manufacturer:") {
+                let v = v.trim();
+                if !v.is_empty() && v != "Unknown" && manufacturer.is_none() {
+                    manufacturer = Some(v.to_string());
+                }
+            } else if let Some(v) = l.strip_prefix("Speed:") {
+                let v = v.trim();
+                if !v.is_empty() && v != "Unknown" && speed.is_none() {
+                    speed = Some(v.to_string());
+                }
+            }
+        }
+        match (manufacturer, speed) {
+            (Some(m), Some(s)) => Some(format!("{m} {s}")),
+            (Some(m), None) => Some(m),
+            (None, Some(s)) => Some(s),
+            (None, None) => None,
+        }
     }
 }
 
@@ -940,8 +995,9 @@ async fn metrics_loop(
     sys.refresh_cpu_usage();
     sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
 
+    let mem_desc = collect_mem_desc().await;
     msg_tx.send(AgentMsg::SysInfo {
-        info: collect_sysinfo(&sys),
+        info: collect_sysinfo(&sys, mem_desc),
     })?;
 
     let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();

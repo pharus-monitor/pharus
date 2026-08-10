@@ -11,6 +11,10 @@ pub struct SystemInfo {
     pub cpu_model: String,
     pub cpu_cores: usize,
     pub virtualization: Option<String>,
+    /// Best-effort memory description, e.g. "Samsung 4800MHz". None when the
+    /// agent could not read it (no dmidecode / WMI access).
+    #[serde(default)]
+    pub mem_desc: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
