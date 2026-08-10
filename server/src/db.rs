@@ -1269,6 +1269,7 @@ mod tests {
             &PingTaskRow {
                 id: 0,
                 agent_id: Some(1),
+                agent_ids: vec![1],
                 label: "cf".into(),
                 kind: "icmp".into(),
                 target: "1.1.1.1".into(),
