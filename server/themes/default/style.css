@@ -674,16 +674,15 @@ body::before {
 #streaming-panel .panel-head { margin-bottom: 0.5rem; }
 #streaming-panel .service-results { margin-top: 0.5rem; }
 
-/* ---------- Host info header, chart tooltip, billing actions, footer ---------- */
-.host-info {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
+/* ---------- Host card title row, chart tooltip, billing actions, footer ---------- */
+.host-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rename-ic {
+  flex-shrink: 0;
+  border: none; background: none; cursor: pointer;
+  font-size: 12px; padding: 2px; line-height: 1;
+  opacity: 0.65; transition: opacity 0.15s;
 }
-.host-info-titles h1 { margin: 0; font-size: 22px; font-weight: 650; color: var(--text-primary); line-height: 1.2; }
-.host-info-titles p { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+.rename-ic:hover { opacity: 1; }
 
 .chart-tip {
   position: absolute;

@@ -12,8 +12,6 @@
   }
 
   /* ---------- DOM ---------- */
-  var hostName = document.getElementById('host-name');
-  var hostOs = document.getElementById('host-os');
   var hostCard = document.getElementById('host-card');
   var tpl = document.getElementById('card-tpl');
   var adminLink = document.getElementById('admin-link');
@@ -51,7 +49,6 @@
   var fMode = document.getElementById('f-mode');
   var fDir = document.getElementById('f-dir');
   var addTaskBtn = document.getElementById('add-task-btn');
-  var renameBtn = document.getElementById('rename-btn');
   var renameModal = document.getElementById('rename-modal');
   var renameInput = document.getElementById('rename-input');
   var renameErr = document.getElementById('rename-err');
@@ -122,7 +119,14 @@
       unlock: P.field(node, 'unlock'),
       editBtn: P.field(node, 'editBtn')
     };
+    card.renameBtn = node.querySelector('#rename-btn');
     card.editBtn.addEventListener('click', function () { openEdit(hostId); });
+    card.renameBtn.addEventListener('click', function () {
+      renameInput.value = entry.name || ('Agent #' + hostId);
+      renameErr.hidden = true;
+      renameModal.hidden = false;
+    });
+    card.renameBtn.hidden = !adminOn;
     return card;
   }
 
@@ -283,8 +287,8 @@
 
   function renderAll() {
     if (!card) card = buildCard();
-    hostName.textContent = entry.name || ('Agent #' + hostId);
-    hostOs.textContent = entry.info ? entry.info.os + ' · ' + entry.info.kernel + ' · ' + entry.info.cpu_cores + 'C' : '—';
+    card.name.textContent = entry.name || ('Agent #' + hostId);
+    card.os.textContent = entry.info ? entry.info.os + ' · ' + entry.info.kernel + ' · ' + entry.info.cpu_cores + 'C' : '—';
     setStatus(entry.online);
     renderMetrics();
     renderBilling();
@@ -690,7 +694,7 @@
         loadPingHistory(false);
         loadStreaming();
       } else {
-        hostName.textContent = 'Agent #' + hostId;
+        if (card) card.name.textContent = 'Agent #' + hostId;
       }
     } else if (msg.type === 'metrics' && msg.agent_id === hostId) {
       if (!entry) entry = { agent_id: hostId };
@@ -744,7 +748,7 @@
     adminOn = on;
     editModeBtn.classList.toggle('active', on);
     addTaskBtn.hidden = !on;
-    renameBtn.hidden = !on;
+    if (card) card.renameBtn.hidden = !on;
     if (card) renderBilling();
   }
 
@@ -887,7 +891,7 @@
       return r.json();
     }).then(function () {
       entry.name = name;
-      hostName.textContent = name;
+      card.name.textContent = name;
       renameModal.hidden = true;
     }).catch(function (e) {
       if (e === 'unauthorized') handleUnauthorized();
@@ -978,11 +982,6 @@
   });
   atSubmit.addEventListener('click', addPingTask);
   atCancel.addEventListener('click', function () { atModal.hidden = true; });
-  renameBtn.addEventListener('click', function () {
-    renameInput.value = entry.name || ('Agent #' + hostId);
-    renameErr.hidden = true;
-    renameModal.hidden = false;
-  });
   renameSave.addEventListener('click', renameAgent);
   renameCancel.addEventListener('click', function () { renameModal.hidden = true; });
   atKind.addEventListener('change', function () {

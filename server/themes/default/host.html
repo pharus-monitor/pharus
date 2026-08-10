@@ -25,14 +25,6 @@
 
   <main class="wrap main">
 
-    <div class="host-info">
-      <div class="host-info-titles">
-        <h1 id="host-name">—</h1>
-        <p id="host-os">—</p>
-      </div>
-      <button class="btn" id="rename-btn" type="button" hidden data-i18n="admin.rename">改名</button>
-    </div>
-
     <div id="host-card" class="host-card"></div>
 
     <section class="hw-panel" id="hw-panel" hidden>
@@ -131,7 +123,10 @@
     <article class="card is-offline">
       <div class="card-head">
         <div class="card-title">
-          <h2 data-f="name">—</h2>
+          <div class="host-name-row">
+            <h2 data-f="name">—</h2>
+            <button class="rename-ic" id="rename-btn" type="button" hidden aria-label="改名" title="改名" data-i18n-aria="admin.rename">✏️</button>
+          </div>
           <p data-f="os">—</p>
         </div>
         <div class="card-badges">
