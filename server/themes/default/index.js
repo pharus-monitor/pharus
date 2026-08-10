@@ -606,6 +606,20 @@
       renderHeader();
       if (meta.admin_enabled) adminLink.hidden = false;
     }).catch(function () {});
+    // Drag grips are admin-only: reveal them when a stored session is valid.
+    var tok = localStorage.getItem('pharus.admin');
+    if (tok) {
+      fetch('/api/admin/check', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + tok }
+      }).then(function (r) {
+        if (r.ok) {
+          document.body.classList.add('is-admin');
+        } else if (r.status === 401) {
+          localStorage.removeItem('pharus.admin');
+        }
+      }).catch(function () {});
+    }
   }
 
   groupToggle.addEventListener('click', function () {

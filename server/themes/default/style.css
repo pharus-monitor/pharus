@@ -143,10 +143,12 @@ body::before {
 
 /* ---------- Drag reorder ---------- */
 .drag-grip {
+  display: none;
   background: none; border: none; padding: 2px 5px;
   color: var(--text-muted); opacity: 0.45; font: inherit; font-size: 13px;
   cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
 }
+body.is-admin .drag-grip { display: inline-block; }
 .drag-grip:hover { opacity: 1; color: var(--text-primary); }
 body.is-dragging { user-select: none; -webkit-user-select: none; }
 .card.dragging, .region-group.dragging {
@@ -530,7 +532,6 @@ body.is-dragging { user-select: none; -webkit-user-select: none; }
 @media (max-width: 720px) {
   .wrap { padding-left: 1rem; padding-right: 1rem; }
   .brand p { display: none; }
-  .view-toggle span:last-child { display: none; }
   .panel-controls, .diag-controls { grid-template-columns: 1fr; }
   .panel-head-inline { align-items: stretch; flex-direction: column; }
   .inline-field { min-width: 0; }
