@@ -16,6 +16,19 @@
   var statCost = document.getElementById('stat-cost');
   var groupToggle = document.getElementById('group-toggle');
   var adminLink = document.getElementById('admin-link');
+  var editModeBtn = document.getElementById('edit-mode-btn');
+  var tokenModal = document.getElementById('token-modal');
+  var tokenInput = document.getElementById('token-input');
+  var tokenErr = document.getElementById('token-err');
+  var editModal = document.getElementById('edit-modal');
+  var editTitle = document.getElementById('edit-title');
+  var editErr = document.getElementById('edit-err');
+  var fResetDay = document.getElementById('f-reset-day');
+  var fQuotaGb = document.getElementById('f-quota-gb');
+  var fExpiresOn = document.getElementById('f-expires-on');
+  var fPrice = document.getElementById('f-price');
+  var fCurrency = document.getElementById('f-currency');
+  var fCycle = document.getElementById('f-cycle');
 
   var GAUGE_LEN = 251.33; // 2 * PI * 40
   var CURRENCY_SYMBOL = { CNY: '¥', USD: '$', EUR: '€' };
@@ -66,7 +79,8 @@
       pings: P.field(node, 'pings'),
       unlockSection: P.field(node, 'unlockSection'),
       unlock: P.field(node, 'unlock'),
-      detailBtn: P.field(node, 'detailBtn')
+      detailBtn: P.field(node, 'detailBtn'),
+      editBtn: P.field(node, 'editBtn')
     };
     node.addEventListener('click', function (ev) {
       if (ev.target.closest('button')) return;
@@ -75,6 +89,10 @@
     card.detailBtn.addEventListener('click', function (ev) {
       ev.stopPropagation();
       openHost(id);
+    });
+    card.editBtn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      openEdit(id);
     });
     cards.set(id, card);
     return card;
@@ -113,7 +131,9 @@
     entry.unlock.forEach(function (result) {
       var status = P.serviceStatus(result);
       var label = result.service || result.name || t('streaming.service');
-      var detail = result.region || result.detail || t('streaming.status.' + status);
+      var unlocked = P.statusClass(status) === 'ok';
+      var detail = result.region || result.detail
+        || (unlocked && entry.region ? (entry.region.code || entry.region.name) : t('streaming.status.' + status));
       P.chip(card.unlock, label, detail, P.statusClass(status));
     });
   }
@@ -200,6 +220,9 @@
   }
 
   var expiryAlertDays = 3;
+  var adminToken = null;
+  var adminOn = false;
+  var editingId = null;
 
   function renderHeader() {
     var online = 0;
@@ -242,7 +265,7 @@
     card.el.classList.toggle('is-offline', !online);
   }
 
-  function renderMetrics(card, d) {
+  function renderMetrics(card, d, rxTotal, txTotal) {
     var cpu = Math.max(0, Math.min(100, d.cpu_usage));
     card.cpuArc.style.strokeDashoffset = (GAUGE_LEN * (1 - cpu / 100)).toFixed(2);
     card.cpuVal.textContent = cpu.toFixed(1) + '%';
@@ -250,8 +273,8 @@
     card.memVal.textContent = P.fmtBytes(d.mem_used) + ' / ' + P.fmtBytes(d.mem_total);
     card.diskFill.style.width = P.pct(d.disk_used, d.disk_total).toFixed(1) + '%';
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
-    card.rx.textContent = P.fmtRate(d.net_rx_bps);
-    card.tx.textContent = P.fmtRate(d.net_tx_bps);
+    card.rx.textContent = P.rateWithTotal(d.net_rx_bps, rxTotal);
+    card.tx.textContent = P.rateWithTotal(d.net_tx_bps, txTotal);
     card.load.textContent = d.load1.toFixed(2);
     card.uptime.textContent = P.fmtUptime(d.uptime);
   }
@@ -263,7 +286,8 @@
   function renderBilling(card, entry) {
     var b = entry.billing;
     var tr = entry.traffic;
-    card.billing.hidden = !hasBilling(b);
+    card.billing.hidden = !(hasBilling(b) || adminOn);
+    card.editBtn.hidden = !adminOn;
     if (card.billing.hidden) return;
     b = b || {};
 
@@ -324,7 +348,9 @@
     card.name.textContent = a.name || 'Agent #' + a.agent_id;
     card.os.textContent = a.info ? a.info.os + ' · ' + a.info.cpu_cores + 'C' : '—';
     setStatus(card, a.online);
-    if (a.data) renderMetrics(card, a.data);
+    if (a.data) {
+      renderMetrics(card, a.data, entry.traffic ? entry.traffic.rx_bytes : 0, entry.traffic ? entry.traffic.tx_bytes : 0);
+    }
     renderBilling(card, entry);
     renderRegion(card, entry);
     renderPings(card, entry);
@@ -344,7 +370,7 @@
       state.set(msg.agent_id, a);
       var card = ensureCard(msg.agent_id);
       setStatus(card, msg.online);
-      renderMetrics(card, msg.data);
+      renderMetrics(card, msg.data, a.traffic ? a.traffic.rx_bytes : 0, a.traffic ? a.traffic.tx_bytes : 0);
       renderHeader();
     } else if (msg.type === 'status') {
       var b = state.get(msg.agent_id) || {};
@@ -386,12 +412,98 @@
     }
   }
 
+  function checkToken(tok) {
+    return fetch('/api/admin/check', {
+      method: 'POST',
+      headers: tok ? { Authorization: 'Bearer ' + tok } : {}
+    }).then(function (r) { return r.status; }).catch(function () { return 0; });
+  }
+
+  function setAdmin(on) {
+    adminOn = on;
+    editModeBtn.classList.toggle('active', on);
+    state.forEach(function (entry, id) {
+      renderBilling(ensureCard(id), entry);
+    });
+  }
+
+  function handleUnauthorized() {
+    sessionStorage.removeItem('pharus.admin');
+    adminToken = null;
+    setAdmin(false);
+    tokenErr.textContent = t('admin.unauthorized');
+    tokenErr.hidden = false;
+    tokenModal.hidden = false;
+  }
+
+  function openEdit(id) {
+    var entry = state.get(id) || {};
+    var b = entry.billing || {};
+    editingId = id;
+    editTitle.textContent = entry.name || ('Agent #' + id);
+    fResetDay.value = b.reset_day != null ? b.reset_day : '';
+    fQuotaGb.value = b.quota_bytes != null ? Math.round(b.quota_bytes / 1073741824 * 100) / 100 : '';
+    fExpiresOn.value = b.expires_at != null ? P.fmtDate(b.expires_at) : '';
+    fPrice.value = b.price != null ? b.price : '';
+    fCurrency.value = b.currency || '';
+    fCycle.value = b.cycle || '';
+    editErr.hidden = true;
+    editModal.hidden = false;
+  }
+
+  function saveEdit() {
+    var body = {
+      reset_day: fResetDay.value === '' ? null : parseInt(fResetDay.value, 10),
+      quota_gb: fQuotaGb.value === '' ? null : parseFloat(fQuotaGb.value),
+      expires_on: fExpiresOn.value === '' ? null : fExpiresOn.value,
+      price: fPrice.value === '' ? null : parseFloat(fPrice.value),
+      currency: fCurrency.value || null,
+      cycle: fCycle.value || null
+    };
+    fetch('/api/admin/agents/' + editingId + '/billing', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (r.status === 401) throw 'unauthorized';
+      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
+      return r.json();
+    }).then(function (res) {
+      var c = state.get(editingId) || {};
+      c.agent_id = editingId;
+      c.billing = res.billing;
+      c.traffic = res.traffic;
+      state.set(editingId, c);
+      renderBilling(ensureCard(editingId), c);
+      renderHeader();
+      editModal.hidden = true;
+    }).catch(function (e) {
+      if (e === 'unauthorized') handleUnauthorized();
+      else {
+        editErr.textContent = t('admin.error') + ': ' + e;
+        editErr.hidden = false;
+      }
+    });
+  }
+
   function probeAdminLink() {
     // 404 = admin API disabled on this server; 401/200 = enabled
     P.requestJson('/api/meta').then(function (meta) {
-      if (meta.admin_enabled) adminLink.hidden = false;
       if (meta.expiry_alert_days) expiryAlertDays = meta.expiry_alert_days;
       renderHeader();
+      if (!meta.admin_enabled) return;
+      adminLink.hidden = false;
+      editModeBtn.hidden = false;
+      var saved = sessionStorage.getItem('pharus.admin');
+      if (!saved) return;
+      checkToken(saved).then(function (st) {
+        if (st === 200) {
+          adminToken = saved;
+          setAdmin(true);
+        } else {
+          sessionStorage.removeItem('pharus.admin');
+        }
+      });
     }).catch(function () {});
   }
 
@@ -399,6 +511,52 @@
     groupedView = !groupedView;
     localStorage.setItem('pharus.regionGrouping', groupedView ? 'true' : 'false');
     renderAgentLayout();
+  });
+
+  editModeBtn.addEventListener('click', function () {
+    if (adminOn) {
+      setAdmin(false);
+    } else if (adminToken) {
+      setAdmin(true);
+    } else {
+      tokenErr.hidden = true;
+      tokenInput.value = '';
+      tokenModal.hidden = false;
+      tokenInput.focus();
+    }
+  });
+  document.getElementById('token-submit').addEventListener('click', function () {
+    var tok = tokenInput.value.trim();
+    if (!tok) return;
+    checkToken(tok).then(function (st) {
+      if (st === 200) {
+        adminToken = tok;
+        sessionStorage.setItem('pharus.admin', tok);
+        tokenModal.hidden = true;
+        setAdmin(true);
+      } else {
+        tokenErr.textContent = t('admin.unauthorized');
+        tokenErr.hidden = false;
+      }
+    });
+  });
+  document.getElementById('token-cancel').addEventListener('click', function () {
+    tokenModal.hidden = true;
+  });
+  document.getElementById('edit-save').addEventListener('click', saveEdit);
+  document.getElementById('edit-cancel').addEventListener('click', function () {
+    editModal.hidden = true;
+  });
+  [tokenModal, editModal].forEach(function (mask) {
+    mask.addEventListener('click', function (ev) {
+      if (ev.target === mask || ev.target.hasAttribute('data-close')) mask.hidden = true;
+    });
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') {
+      tokenModal.hidden = true;
+      editModal.hidden = true;
+    }
   });
 
   /* ---------- boot: language first, then live data ---------- */

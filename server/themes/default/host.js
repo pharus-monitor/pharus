@@ -114,7 +114,9 @@
     entry.unlock.forEach(function (result) {
       var status = P.serviceStatus(result);
       var label = result.service || result.name || t('streaming.service');
-      var detail = result.region || result.detail || t('streaming.status.' + status);
+      var unlocked = P.statusClass(status) === 'ok';
+      var detail = result.region || result.detail
+        || (unlocked && entry.region ? (entry.region.code || entry.region.name) : t('streaming.status.' + status));
       P.chip(card.unlock, label, detail, P.statusClass(status));
     });
   }
@@ -225,8 +227,8 @@
     card.memVal.textContent = P.fmtBytes(d.mem_used) + ' / ' + P.fmtBytes(d.mem_total);
     card.diskFill.style.width = P.pct(d.disk_used, d.disk_total).toFixed(1) + '%';
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
-    card.rx.textContent = P.fmtRate(d.net_rx_bps);
-    card.tx.textContent = P.fmtRate(d.net_tx_bps);
+    card.rx.textContent = P.rateWithTotal(d.net_rx_bps, entry.traffic ? entry.traffic.rx_bytes : 0);
+    card.tx.textContent = P.rateWithTotal(d.net_tx_bps, entry.traffic ? entry.traffic.tx_bytes : 0);
     card.load.textContent = d.load1.toFixed(2);
     card.uptime.textContent = P.fmtUptime(d.uptime);
   }
@@ -569,9 +571,12 @@
       head.appendChild(name);
       head.appendChild(statusEl);
       cardEl.appendChild(head);
-      if (result.detail || result.region) {
+      var unlocked = P.statusClass(status) === 'ok';
+      var detailText = result.region || result.detail
+        || (unlocked && entry.region ? (entry.region.code || entry.region.name) : null);
+      if (detailText) {
         var detail = document.createElement('p');
-        detail.textContent = result.detail || result.region;
+        detail.textContent = detailText;
         cardEl.appendChild(detail);
       }
       streamingResults.appendChild(cardEl);

@@ -82,6 +82,12 @@
     return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
   }
   function fmtRate(bps) { return bps == null ? '—' : fmtBytes(bps) + '/s'; }
+  /// "12.5 MiB/s · 1.2 GiB" — live rate plus the current billing-cycle total.
+  function rateWithTotal(bps, cycleTotal) {
+    var rate = fmtRate(bps);
+    if (cycleTotal) return rate + ' · ' + fmtBytes(cycleTotal);
+    return rate;
+  }
   function fmtUptime(s) {
     if (s == null) return '—';
     var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
@@ -128,8 +134,8 @@
 
   function statusClass(status) {
     status = String(status || '').toLowerCase();
-    if (status === 'available' || status === 'ok' || status === 'unlocked' || status === 'true') return 'ok';
-    if (status === 'unavailable' || status === 'blocked' || status === 'failed' || status === 'false') return 'crit';
+    if (status === 'available' || status === 'ok' || status === 'unlocked' || status === 'true' || status === 'yes') return 'ok';
+    if (status === 'unavailable' || status === 'blocked' || status === 'failed' || status === 'false' || status === 'no') return 'crit';
     return '';
   }
 
@@ -181,8 +187,6 @@
   }
 
   /* ---------- theme (dark / light / follow system) ---------- */
-  var THEME_MODES = ['dark', 'light', 'auto'];
-
   function applyTheme(mode) {
     var root = document.documentElement;
     var systemLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
@@ -204,14 +208,59 @@
     }
     var btn = document.getElementById('theme-btn');
     if (!btn) return;
-    var render = function () { btn.textContent = t('theme.' + mode); btn.setAttribute('data-i18n', 'theme.' + mode); };
-    btn.addEventListener('click', function () {
-      mode = THEME_MODES[(THEME_MODES.indexOf(mode) + 1) % THEME_MODES.length];
-      localStorage.setItem('pharus.theme', mode);
-      applyTheme(mode);
-      render();
+
+    // dropdown menu: dark / light / auto
+    var ICONS = { dark: '●', light: '○', auto: '◐' };
+    var menu = document.createElement('div');
+    menu.className = 'theme-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    var items = {};
+    ['dark', 'light', 'auto'].forEach(function (m) {
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'theme-menu-item';
+      item.setAttribute('role', 'menuitem');
+      item.setAttribute('data-theme-mode', m);
+      var icon = document.createElement('span');
+      icon.className = 'theme-menu-icon';
+      icon.textContent = ICONS[m];
+      var label = document.createElement('span');
+      label.textContent = t('theme.' + m);
+      item.appendChild(icon);
+      item.appendChild(label);
+      item.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        mode = m;
+        localStorage.setItem('pharus.theme', mode);
+        applyTheme(mode);
+        updateItems();
+        menu.hidden = true;
+      });
+      items[m] = item;
+      menu.appendChild(item);
     });
-    render();
+    document.body.appendChild(menu);
+
+    function positionMenu() {
+      var r = btn.getBoundingClientRect();
+      menu.style.top = (r.bottom + 6) + 'px';
+      menu.style.right = (window.innerWidth - r.right) + 'px';
+    }
+    function updateItems() {
+      Object.keys(items).forEach(function (m) {
+        items[m].classList.toggle('active', m === mode);
+      });
+      btn.textContent = t('theme.' + mode);
+    }
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      positionMenu();
+      menu.hidden = !menu.hidden;
+    });
+    menu.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    document.addEventListener('click', function () { menu.hidden = true; });
+    updateItems();
   }
 
   window.Pharus = {
@@ -224,6 +273,7 @@
     initTheme: initTheme,
     fmtBytes: fmtBytes,
     fmtRate: fmtRate,
+    rateWithTotal: rateWithTotal,
     fmtUptime: fmtUptime,
     fmtAmount: fmtAmount,
     fmtDate: fmtDate,

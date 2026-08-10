@@ -588,3 +588,74 @@ body::before {
 }
 .hw-label { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
 .hw-value { font-size: 12px; font-weight: 500; color: var(--text-primary); overflow-wrap: anywhere; }
+
+/* ---------- Theme switcher menu ---------- */
+.view-toggle.active { color: var(--beacon-400); border-color: rgba(251, 191, 36, 0.45); background: rgba(251, 191, 36, 0.10); }
+.theme-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 150px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.theme-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.theme-menu-item:hover { background: rgba(245, 158, 11, 0.10); color: var(--text-primary); }
+.theme-menu-item.active { color: var(--beacon-300); }
+.theme-menu-icon { width: 16px; text-align: center; opacity: 0.85; flex-shrink: 0; }
+
+/* ---------- Light theme polish ---------- */
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(900px 420px at 50% -8%, rgba(245, 158, 11, 0.06), transparent 60%),
+    radial-gradient(1200px 700px at 85% -10%, rgba(99, 102, 241, 0.07), transparent 55%),
+    var(--bg-page);
+}
+:root[data-theme="light"] .card {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 18px -10px rgba(15, 23, 42, 0.10);
+}
+:root[data-theme="light"] .card:hover {
+  box-shadow: 0 12px 32px -14px rgba(15, 23, 42, 0.18);
+  border-color: rgba(245, 158, 11, 0.40);
+}
+:root[data-theme="light"] .stat-tile {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 14px -10px rgba(15, 23, 42, 0.08);
+}
+:root[data-theme="light"] .stat-tile:hover { border-color: var(--border-strong); }
+:root[data-theme="light"] .gauge-track { stroke: rgba(15, 23, 42, 0.08); }
+:root[data-theme="light"] .meter-track { background: rgba(15, 23, 42, 0.08); }
+:root[data-theme="light"] .modal { box-shadow: 0 24px 60px -16px rgba(15, 23, 42, 0.28); }
+:root[data-theme="light"] .field input,
+:root[data-theme="light"] .field select {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+}
+:root[data-theme="light"] .field input:focus,
+:root[data-theme="light"] .field select:focus { border-color: var(--beacon-500); }
+:root[data-theme="light"] .admin-table th { background: rgba(15, 23, 42, 0.04); }
+:root[data-theme="light"] .theme-menu { box-shadow: 0 16px 40px -16px rgba(15, 23, 42, 0.30); }
+:root[data-theme="light"] .theme-menu-item.active { color: #d97706; }
+:root[data-theme="light"] .view-toggle.active { color: #d97706; border-color: rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.10); }
+:root[data-theme="light"] .conn-up, :root[data-theme="light"] .stat-online, :root[data-theme="light"] .status-pill.online { color: #059669; }
+:root[data-theme="light"] .conn-down { color: #b45309; }
+:root[data-theme="light"] .kv .v.warn { color: #b45309; }
+:root[data-theme="light"] .kv .v.crit { color: #dc2626; }
