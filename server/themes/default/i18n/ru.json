@@ -132,6 +132,7 @@
   "region.source.manual": "Задан вручную",
   "region.toggle": "Переключить группировку по регионам",
   "region.ungrouped": "Без региона",
+  "sort.drag": "Перетащить для сортировки",
   "streaming.current": "Статус стриминга",
   "streaming.noData": "Нет результатов проверки",
   "streaming.open": "Стриминг",

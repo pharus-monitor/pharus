@@ -132,6 +132,7 @@
   "region.source.manual": "手动设置",
   "region.toggle": "切换区域分组",
   "region.ungrouped": "未分组",
+  "sort.drag": "拖动排序",
   "streaming.current": "流媒体状态",
   "streaming.noData": "暂无检测结果",
   "streaming.open": "流媒体",

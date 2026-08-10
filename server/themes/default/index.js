@@ -25,6 +25,10 @@
   var cards = new Map();
   var state = new Map();
   var groupedView = localStorage.getItem('pharus.regionGrouping') !== 'false';
+  // Display order. Site-wide order from /api/meta wins over localStorage;
+  // localStorage covers visitors who reorder without an admin session.
+  var agentOrder = readOrder('pharus.agentOrder');
+  var regionOrder = readOrder('pharus.regionOrder');
   var collapsedRegions = new Set();
   try {
     JSON.parse(localStorage.getItem('pharus.collapsedRegions') || '[]').forEach(function (key) {
@@ -73,6 +77,20 @@
     card.ips4 = P.field(node, 'ips4');
     card.ips6 = P.field(node, 'ips6');
     card.ipRow = node.querySelector('.ip-row');
+    node.dataset.agentId = String(id);
+    var grip = P.field(node, 'grip');
+    if (grip) {
+      grip.title = t('sort.drag');
+      enableDrag(grip, {
+        item: '.card',
+        idOf: function (el) { return Number(el.dataset.agentId); },
+        onReorder: function (dragId, refId, after) {
+          agentOrder = reordered(currentAgentIds(), dragId, refId, after);
+          persistOrder();
+          renderAgentLayout();
+        }
+      });
+    }
     node.addEventListener('click', function (ev) {
       if (ev.target.closest('button')) return;
       openHost(id);
@@ -121,9 +139,134 @@
     });
   }
 
+  function readOrder(key) {
+    try {
+      var v = JSON.parse(localStorage.getItem(key) || '[]');
+      return Array.isArray(v) ? v : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   function sortedAgents() {
+    var pos = new Map();
+    agentOrder.forEach(function (id, i) {
+      if (!pos.has(id)) pos.set(id, i);
+    });
     return Array.from(state.entries()).sort(function (a, b) {
+      var pa = pos.has(a[0]) ? pos.get(a[0]) : agentOrder.length;
+      var pb = pos.has(b[0]) ? pos.get(b[0]) : agentOrder.length;
+      if (pa !== pb) return pa - pb;
       return P.entryName(a[1], a[0]).localeCompare(P.entryName(b[1], b[0]));
+    });
+  }
+
+  // Place dragId before/after refId in the current effective order.
+  function reordered(order, dragId, refId, after) {
+    var ids = order.filter(function (v) { return v !== dragId; });
+    var idx = refId == null ? ids.length : ids.indexOf(refId);
+    if (idx < 0) idx = ids.length; else if (after) idx += 1;
+    ids.splice(idx, 0, dragId);
+    return ids;
+  }
+
+  function persistOrder() {
+    localStorage.setItem('pharus.agentOrder', JSON.stringify(agentOrder));
+    localStorage.setItem('pharus.regionOrder', JSON.stringify(regionOrder));
+    var tok = localStorage.getItem('pharus.admin');
+    if (!tok) return;
+    [['agent_order', agentOrder], ['region_order', regionOrder]].forEach(function (kv) {
+      fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
+        body: JSON.stringify({ key: kv[0], value: JSON.stringify(kv[1]) })
+      }).catch(function () {});
+    });
+  }
+
+  function currentAgentIds() {
+    return sortedAgents().map(function (pair) { return pair[0]; });
+  }
+
+  function currentRegionCodes() {
+    var codes = [];
+    sortedAgents().forEach(function (pair) {
+      var region = pair[1].region;
+      var code = region && region.code ? region.code : null;
+      if (code && codes.indexOf(code) < 0) codes.push(code);
+    });
+    var pos = new Map();
+    regionOrder.forEach(function (c, i) { if (!pos.has(c)) pos.set(c, i); });
+    return codes.sort(function (a, b) {
+      var pa = pos.has(a) ? pos.get(a) : regionOrder.length;
+      var pb = pos.has(b) ? pos.get(b) : regionOrder.length;
+      if (pa !== pb) return pa - pb;
+      return a.localeCompare(b);
+    });
+  }
+
+  /* Pointer-based drag reorder (works with mouse and touch). */
+  function enableDrag(grip, config) {
+    grip.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    });
+    grip.addEventListener('pointerdown', function (ev) {
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var item = grip.closest(config.item);
+      if (!item) return;
+      var startX = ev.clientX;
+      var startY = ev.clientY;
+      var dragging = false;
+      var base = null;
+      var over = null;
+
+      function onMove(e) {
+        if (!dragging) {
+          if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) < 6) return;
+          dragging = true;
+          base = item.getBoundingClientRect();
+          item.classList.add('dragging');
+          document.body.classList.add('is-dragging');
+          try { grip.setPointerCapture(ev.pointerId); } catch (err) {}
+        }
+        item.style.transform = 'translate(' + (e.clientX - startX) + 'px,' + (e.clientY - startY) + 'px)';
+        var el = document.elementFromPoint(e.clientX, e.clientY);
+        var target = el ? el.closest(config.item) : null;
+        if (target && (target === item || target.parentNode !== item.parentNode)) target = null;
+        if (over !== target) {
+          if (over) over.classList.remove('drop-target');
+          over = target;
+          if (over) over.classList.add('drop-target');
+        }
+      }
+
+      function finish(e, apply) {
+        grip.removeEventListener('pointermove', onMove);
+        grip.removeEventListener('pointerup', onUp);
+        grip.removeEventListener('pointercancel', onCancel);
+        item.style.transform = '';
+        item.classList.remove('dragging');
+        document.body.classList.remove('is-dragging');
+        if (over) over.classList.remove('drop-target');
+        if (dragging && apply && over) {
+          var r = over.getBoundingClientRect();
+          var after = config.vertical
+            ? e.clientY > r.top + r.height / 2
+            : (e.clientY > r.top + r.height * 0.6 ||
+               (e.clientY > r.top + r.height * 0.4 && e.clientX > r.left + r.width / 2));
+          config.onReorder(config.idOf(item), config.idOf(over), after);
+        }
+      }
+
+      function onUp(e) { finish(e, true); }
+      function onCancel(e) { finish(e, false); }
+
+      grip.addEventListener('pointermove', onMove);
+      grip.addEventListener('pointerup', onUp);
+      grip.addEventListener('pointercancel', onCancel);
     });
   }
 
@@ -152,9 +295,16 @@
       if (!groups.has(key)) groups.set(key, { region: region, agents: [] });
       groups.get(key).agents.push(pair);
     });
+    var rpos = new Map();
+    regionOrder.forEach(function (code, i) {
+      if (!rpos.has(code)) rpos.set(code, i);
+    });
     var ordered = Array.from(groups.entries()).sort(function (a, b) {
       if (a[0] === '__ungrouped') return 1;
       if (b[0] === '__ungrouped') return -1;
+      var pa = rpos.has(a[0]) ? rpos.get(a[0]) : regionOrder.length;
+      var pb = rpos.has(b[0]) ? rpos.get(b[0]) : regionOrder.length;
+      if (pa !== pb) return pa - pb;
       var an = (a[1].region && a[1].region.name) || a[0];
       var bn = (b[1].region && b[1].region.name) || b[0];
       return an.localeCompare(bn);
@@ -164,10 +314,30 @@
       var group = groupPair[1];
       var section = document.createElement('section');
       section.className = 'region-group' + (collapsedRegions.has(key) ? ' collapsed' : '');
+      section.dataset.regionCode = key;
       var head = document.createElement('button');
       head.type = 'button';
       head.className = 'region-head';
       head.setAttribute('aria-expanded', collapsedRegions.has(key) ? 'false' : 'true');
+      var grip = document.createElement('span');
+      grip.className = 'drag-grip';
+      grip.textContent = '⠿';
+      grip.title = t('sort.drag');
+      if (key === '__ungrouped') {
+        grip.hidden = true;
+      } else {
+        enableDrag(grip, {
+          item: '.region-group',
+          vertical: true,
+          idOf: function (el) { return el.dataset.regionCode; },
+          onReorder: function (dragCode, refCode, after) {
+            regionOrder = reordered(currentRegionCodes(), dragCode, refCode, after);
+            persistOrder();
+            renderAgentLayout();
+          }
+        });
+      }
+      head.appendChild(grip);
       var code = document.createElement('span');
       code.className = 'region-code';
       code.textContent = key === '__ungrouped' ? '—' : key;
@@ -427,6 +597,9 @@
     // 404 = admin API disabled on this server; 401/200 = enabled
     P.requestJson('/api/meta').then(function (meta) {
       if (meta.expiry_alert_days) expiryAlertDays = meta.expiry_alert_days;
+      if (Array.isArray(meta.agent_order)) agentOrder = meta.agent_order;
+      if (Array.isArray(meta.region_order)) regionOrder = meta.region_order;
+      renderAgentLayout();
       state.forEach(function (entry, id) {
         renderBilling(ensureCard(id), entry);
       });

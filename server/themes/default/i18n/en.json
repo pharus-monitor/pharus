@@ -132,6 +132,7 @@
   "region.source.manual": "Manual",
   "region.toggle": "Toggle region grouping",
   "region.ungrouped": "Ungrouped",
+  "sort.drag": "Drag to reorder",
   "streaming.current": "Streaming status",
   "streaming.noData": "No streaming results",
   "streaming.open": "Streaming",

@@ -231,6 +231,12 @@ async fn update_setting(
                 return bad("default_language must be en, zh-CN, ja or ru");
             }
         }
+        "agent_order" | "region_order" => {
+            match serde_json::from_str::<Vec<serde_json::Value>>(&body.value) {
+                Ok(v) if v.len() <= 4096 => {}
+                _ => return bad("order must be a JSON array of at most 4096 entries"),
+            }
+        }
         "agent_secret" => {
             if body.value.trim().is_empty() {
                 return bad("agent_secret must not be empty");

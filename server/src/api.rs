@@ -44,7 +44,7 @@ fn now() -> i64 {
 }
 
 async fn meta(State(state): State<SharedState>) -> Response {
-    let (theme, enabled, expiry_days, site_name, site_url, default_language, admin_enabled) = {
+    let (theme, enabled, expiry_days, site_name, site_url, default_language, agent_order, region_order, admin_enabled) = {
         let conn = state.db.lock().unwrap();
         let theme = db::get_setting(&conn, "current_theme")
             .ok()
@@ -61,6 +61,10 @@ async fn meta(State(state): State<SharedState>) -> Response {
         let site_name = get("site_name");
         let site_url = get("site_url");
         let default_language = get("default_language");
+        let agent_order = get("agent_order")
+            .and_then(|v| serde_json::from_str::<Vec<i64>>(&v).ok());
+        let region_order = get("region_order")
+            .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok());
         let admin_enabled = db::count_users(&conn).unwrap_or(0) > 0;
         (
             theme,
@@ -69,6 +73,8 @@ async fn meta(State(state): State<SharedState>) -> Response {
             site_name,
             site_url,
             default_language,
+            agent_order,
+            region_order,
             admin_enabled,
         )
     };
@@ -81,6 +87,8 @@ async fn meta(State(state): State<SharedState>) -> Response {
         "site_name": site_name,
         "site_url": site_url,
         "default_language": default_language,
+        "agent_order": agent_order,
+        "region_order": region_order,
     }))
     .into_response()
 }

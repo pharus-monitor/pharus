@@ -132,6 +132,7 @@
   "region.source.manual": "手動設定",
   "region.toggle": "リージョン表示を切り替え",
   "region.ungrouped": "未分類",
+  "sort.drag": "ドラッグで並び替え",
   "streaming.current": "ストリーミング状態",
   "streaming.noData": "判定結果がありません",
   "streaming.open": "ストリーミング",

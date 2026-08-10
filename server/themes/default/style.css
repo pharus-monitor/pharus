@@ -140,6 +140,21 @@ body::before {
   transition: color 0.2s, border-color 0.2s, background 0.2s;
 }
 .view-toggle:hover { color: var(--text-primary); border-color: var(--border-strong); }
+
+/* ---------- Drag reorder ---------- */
+.drag-grip {
+  background: none; border: none; padding: 2px 5px;
+  color: var(--text-muted); opacity: 0.45; font: inherit; font-size: 13px;
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.drag-grip:hover { opacity: 1; color: var(--text-primary); }
+body.is-dragging { user-select: none; -webkit-user-select: none; }
+.card.dragging, .region-group.dragging {
+  position: relative; z-index: 30; opacity: 0.85; cursor: grabbing;
+  pointer-events: none;
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
+}
+.drop-target { outline: 2px dashed var(--beacon-300, #fbbf24); outline-offset: 3px; border-radius: 12px; }
 .view-toggle[aria-pressed="true"] { color: var(--beacon-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08); }
 .view-toggle-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
