@@ -499,7 +499,10 @@ fn extract_detail(body: &str, key: &str) -> Option<String> {
     None
 }
 
-async fn run_unlock_checks(client: &reqwest::Client) -> Vec<UnlockResult> {
+async fn run_unlock_checks(
+    client: &reqwest::Client,
+    prev: &HashMap<String, UnlockResult>,
+) -> Vec<UnlockResult> {
     let mut out = Vec::with_capacity(UNLOCK_CHECKS.len());
     for c in UNLOCK_CHECKS {
         let result = async {
@@ -528,10 +531,15 @@ async fn run_unlock_checks(client: &reqwest::Client) -> Vec<UnlockResult> {
                 status: "fail".into(),
                 detail: Some(format!("http {code}")),
             },
-            Err(e) => UnlockResult {
-                service: c.service.into(),
-                status: "fail".into(),
-                detail: Some(e.to_string()),
+            // No HTTP response at all (timeout/reset/TLS): transient, keep
+            // showing the last known state instead of a spurious failure.
+            Err(e) => match prev.get(c.service) {
+                Some(p) => p.clone(),
+                None => UnlockResult {
+                    service: c.service.into(),
+                    status: "fail".into(),
+                    detail: Some(e.to_string()),
+                },
             },
         };
         out.push(r);
@@ -544,9 +552,13 @@ async fn unlock_loop(msg_tx: MsgTx, client: reqwest::Client) {
     sleep(Duration::from_secs(5)).await;
     let mut tick = interval(Duration::from_secs(30 * 60));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut last: HashMap<String, UnlockResult> = HashMap::new();
     loop {
         tick.tick().await;
-        let results = run_unlock_checks(&client).await;
+        let results = run_unlock_checks(&client, &last).await;
+        for r in &results {
+            last.insert(r.service.clone(), r.clone());
+        }
         if msg_tx.send(AgentMsg::Unlock { results }).is_err() {
             return;
         }
