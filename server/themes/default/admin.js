@@ -808,7 +808,8 @@
           { value: 'quarterly', label: t('billing.cycle.quarterly') },
           { value: 'yearly', label: t('billing.cycle.yearly') }
         ], b.cycle);
-        ['resetDay', 'quotaGb', 'expiresOn', 'price', 'currency', 'cycle'].forEach(function (k) { root.appendChild(f[k].el); });
+        f.bandwidth = inputField('admin.bandwidth', b.bandwidth, { type: 'number', min: 0, step: '0.1' });
+        ['resetDay', 'quotaGb', 'expiresOn', 'price', 'currency', 'cycle', 'bandwidth'].forEach(function (k) { root.appendChild(f[k].el); });
         modalSubmit = function () {
           var body = {
             reset_day: f.resetDay.input.value === '' ? null : parseInt(f.resetDay.input.value, 10),
@@ -816,7 +817,8 @@
             expires_on: f.expiresOn.input.value === '' ? null : f.expiresOn.input.value,
             price: f.price.input.value === '' ? null : parseFloat(f.price.input.value),
             currency: f.currency.input.value || null,
-            cycle: f.cycle.input.value || null
+            cycle: f.cycle.input.value || null,
+            bandwidth: f.bandwidth.input.value === '' ? null : parseFloat(f.bandwidth.input.value)
           };
           return options.request('/api/admin/agents/' + agent.agent_id + '/billing', {
             method: 'PUT',
@@ -861,7 +863,18 @@
         options.content.appendChild(toolbar(t('admin.settings'), null));
         var box = node('div', 'feature-defaults');
         var days = inputField('settings.expiryDays', meta.expiry_alert_days || 3, { type: 'number', min: 1, max: 365 });
+        var mode = selectField('settings.trafficMode', [
+          { value: 'bi', label: t('settings.modeBi') },
+          { value: 'uni', label: t('settings.modeUni') }
+        ], meta.traffic_mode || 'bi');
+        var dir = selectField('settings.trafficDir', [
+          { value: 'down', label: t('settings.dirDown') },
+          { value: 'up', label: t('settings.dirUp') },
+          { value: 'max', label: t('settings.dirMax') }
+        ], meta.traffic_dir || 'down');
         box.appendChild(days.el);
+        box.appendChild(mode.el);
+        box.appendChild(dir.el);
         var status = node('span', 'inline-status');
         var save = actionButton(t('admin.save'), function () {
           var v = parseInt(days.input.value, 10);
@@ -872,11 +885,18 @@
           }
           save.disabled = true;
           status.textContent = t('common.saving');
-          options.request('/api/admin/settings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: 'expiry_alert_days', value: String(v) })
-          }).then(function () {
+          function put(key, value) {
+            return options.request('/api/admin/settings', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: key, value: value })
+            });
+          }
+          Promise.all([
+            put('expiry_alert_days', String(v)),
+            put('traffic_mode', mode.input.value),
+            put('traffic_dir', dir.input.value)
+          ]).then(function () {
             status.textContent = t('common.saved'); status.className = 'inline-status ok';
           }).catch(function (error) {
             status.textContent = t('common.error') + ': ' + error.message; status.className = 'inline-status error';

@@ -51,6 +51,8 @@
       memVal: P.field(node, 'memVal'),
       diskFill: P.field(node, 'diskFill'),
       diskVal: P.field(node, 'diskVal'),
+      swapFill: P.field(node, 'swapFill'),
+      swapVal: P.field(node, 'swapVal'),
       rx: P.field(node, 'rx'),
       tx: P.field(node, 'tx'),
       load: P.field(node, 'load'),
@@ -61,6 +63,7 @@
       expires: P.field(node, 'expires'),
       price: P.field(node, 'price'),
       resetDay: P.field(node, 'resetDay'),
+      bandwidth: P.field(node, 'bandwidth'),
       region: P.field(node, 'region'),
       pingSection: P.field(node, 'pingSection'),
       pings: P.field(node, 'pings'),
@@ -202,6 +205,8 @@
   }
 
   var expiryAlertDays = 3;
+  var trafficMode = 'bi';
+  var trafficDir = 'down';
 
   function renderHeader() {
     var online = 0;
@@ -252,6 +257,8 @@
     card.memVal.textContent = P.fmtBytes(d.mem_used) + ' / ' + P.fmtBytes(d.mem_total);
     card.diskFill.style.width = P.pct(d.disk_used, d.disk_total).toFixed(1) + '%';
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
+    card.swapFill.style.width = P.pct(d.swap_used, d.swap_total).toFixed(1) + '%';
+    card.swapVal.textContent = P.fmtBytes(d.swap_used) + ' / ' + P.fmtBytes(d.swap_total);
     card.rx.textContent = P.fmtRate(d.net_rx_bps);
     card.tx.textContent = P.fmtRate(d.net_tx_bps);
     card.load.textContent = d.load1.toFixed(2);
@@ -269,7 +276,11 @@
     if (card.billing.hidden) return;
     b = b || {};
 
-    var used = tr ? (tr.rx_bytes || 0) + (tr.tx_bytes || 0) : 0;
+    var rx = tr ? (tr.rx_bytes || 0) : 0;
+    var tx = tr ? (tr.tx_bytes || 0) : 0;
+    var used = trafficMode === 'uni'
+      ? (trafficDir === 'up' ? tx : trafficDir === 'max' ? Math.max(rx, tx) : rx)
+      : (rx + tx);
     if (b.quota_bytes != null) {
       card.trafficVal.textContent = P.fmtBytes(used) + ' / ' + P.fmtBytes(b.quota_bytes);
       var p = P.pct(used, b.quota_bytes);
@@ -305,6 +316,7 @@
     }
 
     card.resetDay.textContent = b.reset_day != null ? String(b.reset_day) : '—';
+    card.bandwidth.textContent = b.bandwidth != null ? b.bandwidth + ' Mbps' : '—';
   }
 
   function applySnapshot(a) {
@@ -394,6 +406,11 @@
     // 404 = admin API disabled on this server; 401/200 = enabled
     P.requestJson('/api/meta').then(function (meta) {
       if (meta.expiry_alert_days) expiryAlertDays = meta.expiry_alert_days;
+      if (meta.traffic_mode) trafficMode = meta.traffic_mode;
+      if (meta.traffic_dir) trafficDir = meta.traffic_dir;
+      state.forEach(function (entry, id) {
+        renderBilling(ensureCard(id), entry);
+      });
       renderHeader();
       if (meta.admin_enabled) adminLink.hidden = false;
     }).catch(function () {});

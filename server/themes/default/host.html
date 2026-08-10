@@ -41,43 +41,6 @@
       <div class="hw-grid" id="hw-grid"></div>
     </section>
 
-    <section class="hw-panel" id="host-addtask" hidden>
-      <div class="panel-head">
-        <div>
-          <h2 data-i18n="host.addPingTask">添加延迟监控任务</h2>
-          <p data-i18n="host.addPingTaskSub">仅应用到当前主机</p>
-        </div>
-      </div>
-      <div class="panel-controls addtask-controls">
-        <label class="field compact">
-          <span data-i18n="pingTask.label">名称</span>
-          <input id="at-label" type="text" />
-        </label>
-        <label class="field compact">
-          <span data-i18n="pingTask.kind">类型</span>
-          <select id="at-kind">
-            <option value="icmp">ICMP</option>
-            <option value="tcp" selected>TCP</option>
-            <option value="http">HTTP</option>
-          </select>
-        </label>
-        <label class="field compact">
-          <span data-i18n="pingTask.target">目标</span>
-          <input id="at-target" type="text" placeholder="example.com / 1.1.1.1" data-i18n-placeholder="diag.targetPlaceholder" />
-        </label>
-        <label class="field compact" id="at-port-field">
-          <span data-i18n="pingTask.port">端口</span>
-          <input id="at-port" type="number" min="1" max="65535" value="443" />
-        </label>
-        <label class="field compact">
-          <span data-i18n="pingTask.interval">间隔(秒)</span>
-          <input id="at-interval" type="number" min="5" value="60" />
-        </label>
-        <button class="btn primary" id="at-submit" type="button" data-i18n="common.add">添加</button>
-        <span class="inline-status" id="at-status"></span>
-      </div>
-    </section>
-
     <div class="feature-grid" id="feature-grid">
 
       <section class="feature-panel" id="ping-panel">
@@ -86,6 +49,7 @@
             <h2 data-i18n="ping.title">延迟历史</h2>
             <p data-i18n="ping.subtitle">平均往返延迟与丢包趋势</p>
           </div>
+          <button class="btn" id="add-task-btn" type="button" hidden data-i18n="host.addPingTask">添加任务</button>
         </div>
         <div class="panel-controls">
           <label class="field compact">
@@ -199,6 +163,13 @@
             </div>
             <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
           </div>
+          <div class="meter">
+            <div class="meter-head">
+              <span class="meter-label" data-i18n="meter.swap">Swap</span>
+              <span class="meter-value" data-f="swapVal">—</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill swap" data-f="swapFill"></div></div>
+          </div>
         </div>
       </div>
 
@@ -236,6 +207,7 @@
           <div class="kv"><span class="k" data-i18n="billing.expires">Expires</span><span class="v" data-f="expires">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.price">Price</span><span class="v" data-f="price">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.resetDay">Reset day</span><span class="v" data-f="resetDay">—</span></div>
+          <div class="kv"><span class="k" data-i18n="billing.bandwidth">带宽</span><span class="v" data-f="bandwidth">—</span></div>
           <div class="kv billing-edit-kv"><button class="edit-btn" type="button" data-f="editBtn" hidden data-i18n="admin.edit">编辑</button></div>
         </div>
       </div>
@@ -318,6 +290,46 @@
       <div class="modal-actions">
         <button class="btn ghost" id="edit-cancel" data-i18n="admin.cancel">取消</button>
         <button class="btn primary" id="edit-save" data-i18n="admin.save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="at-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 data-i18n="host.addPingTask">添加延迟监控任务</h3>
+        <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
+      </div>
+      <label class="field">
+        <span data-i18n="pingTask.label">名称</span>
+        <input id="at-label" type="text" />
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span data-i18n="pingTask.kind">类型</span>
+          <select id="at-kind">
+            <option value="icmp">ICMP</option>
+            <option value="tcp" selected>TCP</option>
+            <option value="http">HTTP</option>
+          </select>
+        </label>
+        <label class="field" id="at-port-field">
+          <span data-i18n="pingTask.port">端口</span>
+          <input id="at-port" type="number" min="1" max="65535" value="443" />
+        </label>
+        <label class="field">
+          <span data-i18n="pingTask.interval">间隔(秒)</span>
+          <input id="at-interval" type="number" min="5" value="60" />
+        </label>
+      </div>
+      <label class="field">
+        <span data-i18n="pingTask.target">目标</span>
+        <input id="at-target" type="text" placeholder="example.com / 1.1.1.1" data-i18n-placeholder="diag.targetPlaceholder" />
+      </label>
+      <p class="modal-err" id="at-err" hidden></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="at-cancel" data-i18n="admin.cancel">取消</button>
+        <button class="btn primary" id="at-submit" data-i18n="common.add">添加</button>
       </div>
     </div>
   </div>

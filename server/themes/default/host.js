@@ -46,7 +46,8 @@
   var fPrice = document.getElementById('f-price');
   var fCurrency = document.getElementById('f-currency');
   var fCycle = document.getElementById('f-cycle');
-  var addtaskPanel = document.getElementById('host-addtask');
+  var addTaskBtn = document.getElementById('add-task-btn');
+  var atModal = document.getElementById('at-modal');
   var atLabel = document.getElementById('at-label');
   var atKind = document.getElementById('at-kind');
   var atTarget = document.getElementById('at-target');
@@ -54,7 +55,8 @@
   var atPort = document.getElementById('at-port');
   var atInterval = document.getElementById('at-interval');
   var atSubmit = document.getElementById('at-submit');
-  var atStatus = document.getElementById('at-status');
+  var atCancel = document.getElementById('at-cancel');
+  var atErr = document.getElementById('at-err');
 
   var GAUGE_LEN = 251.33;
   var CURRENCY_SYMBOL = { CNY: '¥', USD: '$', EUR: '€' };
@@ -70,6 +72,8 @@
   var adminToken = null;
   var adminOn = false;
   var editingId = null;
+  var trafficMode = 'bi';
+  var trafficDir = 'down';
 
   /* ---------- host card ---------- */
   function buildCard() {
@@ -86,6 +90,8 @@
       memVal: P.field(node, 'memVal'),
       diskFill: P.field(node, 'diskFill'),
       diskVal: P.field(node, 'diskVal'),
+      swapFill: P.field(node, 'swapFill'),
+      swapVal: P.field(node, 'swapVal'),
       rx: P.field(node, 'rx'),
       tx: P.field(node, 'tx'),
       load: P.field(node, 'load'),
@@ -96,6 +102,7 @@
       expires: P.field(node, 'expires'),
       price: P.field(node, 'price'),
       resetDay: P.field(node, 'resetDay'),
+      bandwidth: P.field(node, 'bandwidth'),
       region: P.field(node, 'region'),
       pingSection: P.field(node, 'pingSection'),
       pings: P.field(node, 'pings'),
@@ -191,7 +198,11 @@
     b = b || {};
     tr = tr || {};
 
-    var used = tr ? (tr.rx_bytes || 0) + (tr.tx_bytes || 0) : 0;
+    var rx = tr ? (tr.rx_bytes || 0) : 0;
+    var tx = tr ? (tr.tx_bytes || 0) : 0;
+    var used = trafficMode === 'uni'
+      ? (trafficDir === 'up' ? tx : trafficDir === 'max' ? Math.max(rx, tx) : rx)
+      : (rx + tx);
     if (b.quota_bytes != null) {
       card.trafficVal.textContent = P.fmtBytes(used) + ' / ' + P.fmtBytes(b.quota_bytes);
       var p = P.pct(used, b.quota_bytes);
@@ -226,6 +237,7 @@
       card.price.textContent = '—';
     }
     card.resetDay.textContent = b.reset_day != null ? String(b.reset_day) : '—';
+    card.bandwidth.textContent = b.bandwidth != null ? b.bandwidth + ' Mbps' : '—';
   }
 
   function setStatus(online) {
@@ -249,6 +261,8 @@
     card.memVal.textContent = P.fmtBytes(d.mem_used) + ' / ' + P.fmtBytes(d.mem_total);
     card.diskFill.style.width = P.pct(d.disk_used, d.disk_total).toFixed(1) + '%';
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
+    card.swapFill.style.width = P.pct(d.swap_used, d.swap_total).toFixed(1) + '%';
+    card.swapVal.textContent = P.fmtBytes(d.swap_used) + ' / ' + P.fmtBytes(d.swap_total);
     card.rx.textContent = P.fmtRate(d.net_rx_bps);
     card.tx.textContent = P.fmtRate(d.net_tx_bps);
     card.load.textContent = d.load1.toFixed(2);
@@ -431,7 +445,16 @@
       swatch.className = 'legend-swatch';
       swatch.style.background = color;
       var label = document.createElement('span');
-      label.textContent = task.label || ('#' + task.id);
+      var last = series[series.length - 1];
+      var name = task.label || ('#' + task.id);
+      if (last) {
+        var curRtt = Number(last.rtt_avg);
+        var curLoss = Math.max(0, Math.min(1, Number(last.loss) || 0));
+        name += ' · ' + formatChartTime(Number(last.ts))
+          + ' · ' + (Number.isFinite(curRtt) ? curRtt.toFixed(1) + ' ms' : '—')
+          + ' · ' + Math.round(curLoss * 100) + '% ' + t('ping.lossShort');
+      }
+      label.textContent = name;
       legend.appendChild(swatch);
       legend.appendChild(label);
       pingLegend.appendChild(legend);
@@ -707,7 +730,7 @@
   function setAdmin(on) {
     adminOn = on;
     editModeBtn.classList.toggle('active', on);
-    addtaskPanel.hidden = !on;
+    addTaskBtn.hidden = !on;
     if (card) renderBilling();
   }
 
@@ -769,8 +792,8 @@
     var label = atLabel.value.trim();
     var target = atTarget.value.trim();
     if (!label || !target) {
-      atStatus.textContent = t('common.error');
-      atStatus.className = 'inline-status error';
+      atErr.textContent = t('common.error');
+      atErr.hidden = false;
       return;
     }
     var body = {
@@ -783,8 +806,7 @@
       enabled: true,
       agent_ids: [hostId]
     };
-    atStatus.textContent = t('common.saving');
-    atStatus.className = 'inline-status';
+    atErr.hidden = true;
     atSubmit.disabled = true;
     fetch('/api/admin/ping-tasks', {
       method: 'POST',
@@ -795,21 +817,23 @@
       if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
       return r.json();
     }).then(function () {
-      atStatus.textContent = t('common.saved');
-      atStatus.className = 'inline-status ok';
       atLabel.value = '';
       atTarget.value = '';
+      atModal.hidden = true;
     }).catch(function (e) {
       if (e === 'unauthorized') handleUnauthorized();
       else {
-        atStatus.textContent = t('common.error') + ': ' + (e && e.message ? e.message : e);
-        atStatus.className = 'inline-status error';
+        atErr.textContent = t('common.error') + ': ' + (e && e.message ? e.message : e);
+        atErr.hidden = false;
       }
     }).then(function () { atSubmit.disabled = false; });
   }
 
   function probeAdminLink() {
     P.requestJson('/api/meta').then(function (meta) {
+      if (meta.traffic_mode) trafficMode = meta.traffic_mode;
+      if (meta.traffic_dir) trafficDir = meta.traffic_dir;
+      if (card && entry) renderBilling();
       if (!meta.admin_enabled) return;
       adminLink.hidden = false;
       editModeBtn.hidden = false;
@@ -866,11 +890,29 @@
   document.getElementById('edit-cancel').addEventListener('click', function () {
     editModal.hidden = true;
   });
+  addTaskBtn.addEventListener('click', function () {
+    if (!adminOn) {
+      if (!adminToken) {
+        tokenErr.hidden = true;
+        tokenInput.value = '';
+        tokenModal.hidden = false;
+        tokenInput.focus();
+        return;
+      }
+      setAdmin(true);
+    }
+    atErr.hidden = true;
+    atLabel.value = '';
+    atTarget.value = '';
+    atPortField.hidden = atKind.value === 'icmp';
+    atModal.hidden = false;
+  });
   atSubmit.addEventListener('click', addPingTask);
+  atCancel.addEventListener('click', function () { atModal.hidden = true; });
   atKind.addEventListener('change', function () {
     atPortField.hidden = atKind.value === 'icmp';
   });
-  [tokenModal, editModal].forEach(function (mask) {
+  [tokenModal, editModal, atModal].forEach(function (mask) {
     mask.addEventListener('click', function (ev) {
       if (ev.target === mask || ev.target.hasAttribute('data-close')) mask.hidden = true;
     });
@@ -879,6 +921,7 @@
     if (ev.key === 'Escape') {
       tokenModal.hidden = true;
       editModal.hidden = true;
+      atModal.hidden = true;
     }
   });
   var chartResizePending = false;

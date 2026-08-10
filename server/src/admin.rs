@@ -94,22 +94,29 @@ async fn update_setting(
     State(state): State<SharedState>,
     Json(body): Json<SettingUpdate>,
 ) -> Response {
-    if body.key != "expiry_alert_days" {
-        return err(StatusCode::UNPROCESSABLE_ENTITY, "unknown setting key");
-    }
-    match body.value.parse::<i64>() {
-        Ok(v) if (1..=365).contains(&v) => {}
-        _ => {
-            return err(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "expiry_alert_days must be a number within 1..=365",
-            )
+    match body.key.as_str() {
+        "expiry_alert_days" => match body.value.parse::<i64>() {
+            Ok(v) if (1..=365).contains(&v) => {}
+            _ => {
+                return bad("expiry_alert_days must be a number within 1..=365");
+            }
+        },
+        "traffic_mode" => {
+            if body.value != "bi" && body.value != "uni" {
+                return bad("traffic_mode must be bi or uni");
+            }
         }
+        "traffic_dir" => {
+            if !matches!(body.value.as_str(), "up" | "down" | "max") {
+                return bad("traffic_dir must be up, down or max");
+            }
+        }
+        _ => return bad("unknown setting key"),
     }
     {
         let conn = state.db.lock().unwrap();
         if let Err(e) = db::set_setting(&conn, &body.key, &body.value) {
-            return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+            return db_err(e);
         }
     }
     StatusCode::OK.into_response()
@@ -884,6 +891,7 @@ pub struct BillingUpdate {
     pub price: Option<f64>,
     pub currency: Option<Currency>,
     pub cycle: Option<BillingCycle>,
+    pub bandwidth: Option<f64>,
 }
 
 async fn update_billing(
@@ -904,6 +912,11 @@ async fn update_billing(
     if let Some(p) = body.price {
         if !p.is_finite() || p < 0.0 {
             return bad("price must be >= 0");
+        }
+    }
+    if let Some(bw) = body.bandwidth {
+        if !bw.is_finite() || bw <= 0.0 {
+            return bad("bandwidth must be positive (Mbps)");
         }
     }
     let expires_at = match &body.expires_on {
@@ -929,6 +942,7 @@ async fn update_billing(
         price: body.price,
         currency: body.currency,
         cycle: body.cycle,
+        bandwidth: body.bandwidth,
     };
 
     let rows = {

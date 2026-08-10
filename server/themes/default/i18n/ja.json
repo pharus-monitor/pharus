@@ -178,6 +178,7 @@
   "gauge.aria": "CPU 使用率",
   "meter.mem": "メモリ",
   "meter.disk": "ディスク",
+  "meter.swap": "Swap",
   "kv.download": "ダウンロード",
   "kv.upload": "アップロード",
   "kv.load": "負荷",
@@ -240,5 +241,14 @@
   "billing.quota": "上限",
   "common.add": "追加",
   "host.addPingTask": "遅延監視タスクを追加",
-  "host.addPingTaskSub": "このホストのみに適用"
+  "host.addPingTaskSub": "このホストのみに適用",
+  "billing.bandwidth": "帯域",
+  "admin.bandwidth": "帯域制限 (Mbps)",
+  "settings.trafficMode": "トラフィック統計モード",
+  "settings.modeBi": "双方向",
+  "settings.modeUni": "単方向",
+  "settings.trafficDir": "単方向の値",
+  "settings.dirDown": "ダウンロード",
+  "settings.dirUp": "アップロード",
+  "settings.dirMax": "最大値"
 }

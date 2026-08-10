@@ -61,6 +61,9 @@ pub struct BillingInfo {
     pub price: Option<f64>,
     pub currency: Option<Currency>,
     pub cycle: Option<BillingCycle>,
+    /// Manual bandwidth cap in Mbps.
+    #[serde(default)]
+    pub bandwidth: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

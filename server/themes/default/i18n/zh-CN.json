@@ -178,6 +178,7 @@
   "gauge.aria": "CPU 使用率",
   "meter.mem": "内存",
   "meter.disk": "磁盘",
+  "meter.swap": "Swap",
   "kv.download": "下载",
   "kv.upload": "上传",
   "kv.load": "负载",
@@ -240,5 +241,14 @@
   "billing.quota": "配额",
   "common.add": "添加",
   "host.addPingTask": "添加延迟监控任务",
-  "host.addPingTaskSub": "仅应用到当前主机"
+  "host.addPingTaskSub": "仅应用到当前主机",
+  "billing.bandwidth": "带宽",
+  "admin.bandwidth": "带宽限制 (Mbps)",
+  "settings.trafficMode": "流量统计模式",
+  "settings.modeBi": "双向",
+  "settings.modeUni": "单向",
+  "settings.trafficDir": "单向取值",
+  "settings.dirDown": "下行",
+  "settings.dirUp": "上行",
+  "settings.dirMax": "最大值"
 }

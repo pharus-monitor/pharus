@@ -178,6 +178,7 @@
   "gauge.aria": "CPU usage",
   "meter.mem": "Memory",
   "meter.disk": "Disk",
+  "meter.swap": "Swap",
   "kv.download": "Download",
   "kv.upload": "Upload",
   "kv.load": "Load",
@@ -240,5 +241,14 @@
   "billing.quota": "Quota",
   "common.add": "Add",
   "host.addPingTask": "Add latency monitoring task",
-  "host.addPingTaskSub": "Applies to this host only"
+  "host.addPingTaskSub": "Applies to this host only",
+  "billing.bandwidth": "Bandwidth",
+  "admin.bandwidth": "Bandwidth limit (Mbps)",
+  "settings.trafficMode": "Traffic statistic mode",
+  "settings.modeBi": "Bidirectional",
+  "settings.modeUni": "Unidirectional",
+  "settings.trafficDir": "Unidirectional value",
+  "settings.dirDown": "Download",
+  "settings.dirUp": "Upload",
+  "settings.dirMax": "Maximum"
 }

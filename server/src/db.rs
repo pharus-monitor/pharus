@@ -156,7 +156,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -196,6 +196,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         // agent_id column stays as a compatibility mirror (NULL = all).
         add_column(conn, "ping_tasks", "agent_ids", "TEXT")?;
         add_column(conn, "tasks", "agent_ids", "TEXT")?;
+    }
+    if version < 5 {
+        add_column(conn, "agents", "bandwidth", "REAL")?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
@@ -326,7 +329,7 @@ fn cycle_from_str(s: &str) -> Option<BillingCycle> {
 
 pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
     let mut stmt = conn.prepare(
-        "SELECT id, reset_day, quota_bytes, expires_at, price, currency, billing_cycle
+        "SELECT id, reset_day, quota_bytes, expires_at, price, currency, billing_cycle, bandwidth
          FROM agents",
     )?;
     let rows = stmt
@@ -343,6 +346,7 @@ pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
                     price: r.get(4)?,
                     currency: currency.and_then(|s| currency_from_str(&s)),
                     cycle: cycle.and_then(|s| cycle_from_str(&s)),
+                    bandwidth: r.get(7)?,
                 },
             ))
         })?
@@ -353,7 +357,7 @@ pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
 pub fn set_billing(conn: &Connection, agent_id: i64, b: &BillingInfo) -> Result<usize> {
     let rows = conn.execute(
         "UPDATE agents SET reset_day = ?2, quota_bytes = ?3, expires_at = ?4,
-         price = ?5, currency = ?6, billing_cycle = ?7 WHERE id = ?1",
+         price = ?5, currency = ?6, billing_cycle = ?7, bandwidth = ?8 WHERE id = ?1",
         params![
             agent_id,
             b.reset_day.map(|v| v as i64),
@@ -362,6 +366,7 @@ pub fn set_billing(conn: &Connection, agent_id: i64, b: &BillingInfo) -> Result<
             b.price,
             b.currency.map(currency_to_str),
             b.cycle.map(cycle_to_str),
+            b.bandwidth,
         ],
     )?;
     Ok(rows)

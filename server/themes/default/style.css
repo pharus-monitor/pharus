@@ -288,6 +288,7 @@ body::before {
 .meter-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 0.8s var(--ease-out); }
 .meter-fill.mem  { background: linear-gradient(90deg, var(--sky-500), var(--sky-400));       box-shadow: 0 0 8px rgba(56, 189, 248, 0.35); }
 .meter-fill.disk { background: linear-gradient(90deg, var(--violet-500), var(--violet-400)); box-shadow: 0 0 8px rgba(167, 139, 250, 0.35); }
+.meter-fill.swap { background: linear-gradient(90deg, #e11d48, #fb7185); box-shadow: 0 0 8px rgba(251, 113, 133, 0.35); }
 
 /* ---------- Key-value rows ---------- */
 .divider { margin: 1rem 0; border-top: 1px solid rgba(255, 255, 255, 0.05); }
@@ -670,3 +671,5 @@ body::before {
 .agent-multi { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; padding: 2px 0; }
 .agent-multi .field-check { margin-bottom: 0.35rem; }
 .agent-multi-all { font-weight: 600; color: var(--text-primary); }
+#streaming-panel .panel-head { margin-bottom: 0.5rem; }
+#streaming-panel .service-results { margin-top: 0.5rem; }

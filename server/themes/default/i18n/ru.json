@@ -178,6 +178,7 @@
   "gauge.aria": "Загрузка CPU",
   "meter.mem": "Память",
   "meter.disk": "Диск",
+  "meter.swap": "Swap",
   "kv.download": "Приём",
   "kv.upload": "Передача",
   "kv.load": "Нагрузка",
@@ -240,5 +241,14 @@
   "billing.quota": "Лимит",
   "common.add": "Добавить",
   "host.addPingTask": "Добавить задачу задержки",
-  "host.addPingTaskSub": "Только для этого хоста"
+  "host.addPingTaskSub": "Только для этого хоста",
+  "billing.bandwidth": "Пропускная способность",
+  "admin.bandwidth": "Лимит (Мбит/с)",
+  "settings.trafficMode": "Режим учёта трафика",
+  "settings.modeBi": "Двунаправленный",
+  "settings.modeUni": "Однонаправленный",
+  "settings.trafficDir": "Значение",
+  "settings.dirDown": "Загрузка",
+  "settings.dirUp": "Отдача",
+  "settings.dirMax": "Максимум"
 }
