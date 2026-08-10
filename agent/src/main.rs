@@ -96,7 +96,7 @@ fn collect_sysinfo(sys: &System, mem_desc: Option<String>) -> SystemInfo {
 fn collect_ips() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let networks = sysinfo::Networks::new_with_refreshed_list();
-    for (_name, data) in networks.iter() {
+    for data in networks.values() {
         for net in data.ip_networks() {
             let addr = net.addr;
             if addr.is_loopback() || addr.is_unspecified() {
