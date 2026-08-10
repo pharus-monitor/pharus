@@ -265,7 +265,7 @@
     card.el.classList.toggle('is-offline', !online);
   }
 
-  function renderMetrics(card, d, rxTotal, txTotal) {
+  function renderMetrics(card, d) {
     var cpu = Math.max(0, Math.min(100, d.cpu_usage));
     card.cpuArc.style.strokeDashoffset = (GAUGE_LEN * (1 - cpu / 100)).toFixed(2);
     card.cpuVal.textContent = cpu.toFixed(1) + '%';
@@ -273,8 +273,8 @@
     card.memVal.textContent = P.fmtBytes(d.mem_used) + ' / ' + P.fmtBytes(d.mem_total);
     card.diskFill.style.width = P.pct(d.disk_used, d.disk_total).toFixed(1) + '%';
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
-    card.rx.textContent = P.rateWithTotal(d.net_rx_bps, rxTotal);
-    card.tx.textContent = P.rateWithTotal(d.net_tx_bps, txTotal);
+    card.rx.textContent = P.fmtRate(d.net_rx_bps);
+    card.tx.textContent = P.fmtRate(d.net_tx_bps);
     card.load.textContent = d.load1.toFixed(2);
     card.uptime.textContent = P.fmtUptime(d.uptime);
   }
@@ -349,7 +349,7 @@
     card.os.textContent = a.info ? a.info.os + ' · ' + a.info.cpu_cores + 'C' : '—';
     setStatus(card, a.online);
     if (a.data) {
-      renderMetrics(card, a.data, entry.traffic ? entry.traffic.rx_bytes : 0, entry.traffic ? entry.traffic.tx_bytes : 0);
+      renderMetrics(card, a.data);
     }
     renderBilling(card, entry);
     renderRegion(card, entry);
@@ -370,7 +370,7 @@
       state.set(msg.agent_id, a);
       var card = ensureCard(msg.agent_id);
       setStatus(card, msg.online);
-      renderMetrics(card, msg.data, a.traffic ? a.traffic.rx_bytes : 0, a.traffic ? a.traffic.tx_bytes : 0);
+      renderMetrics(card, msg.data);
       renderHeader();
     } else if (msg.type === 'status') {
       var b = state.get(msg.agent_id) || {};

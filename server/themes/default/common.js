@@ -82,12 +82,6 @@
     return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
   }
   function fmtRate(bps) { return bps == null ? '—' : fmtBytes(bps) + '/s'; }
-  /// "12.5 MiB/s · 1.2 GiB" — live rate plus the current billing-cycle total.
-  function rateWithTotal(bps, cycleTotal) {
-    var rate = fmtRate(bps);
-    if (cycleTotal) return rate + ' · ' + fmtBytes(cycleTotal);
-    return rate;
-  }
   function fmtUptime(s) {
     if (s == null) return '—';
     var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
@@ -244,8 +238,11 @@
 
     function positionMenu() {
       var r = btn.getBoundingClientRect();
+      var w = menu.offsetWidth || 150;
+      var left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
       menu.style.top = (r.bottom + 6) + 'px';
-      menu.style.right = (window.innerWidth - r.right) + 'px';
+      menu.style.left = left + 'px';
+      menu.style.right = 'auto';
     }
     function updateItems() {
       Object.keys(items).forEach(function (m) {
@@ -273,7 +270,6 @@
     initTheme: initTheme,
     fmtBytes: fmtBytes,
     fmtRate: fmtRate,
-    rateWithTotal: rateWithTotal,
     fmtUptime: fmtUptime,
     fmtAmount: fmtAmount,
     fmtDate: fmtDate,

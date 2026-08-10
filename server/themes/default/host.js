@@ -68,8 +68,6 @@
       billing: P.field(node, 'billing'),
       trafficVal: P.field(node, 'trafficVal'),
       trafficFill: P.field(node, 'trafficFill'),
-      rxTotal: P.field(node, 'rxTotal'),
-      txTotal: P.field(node, 'txTotal'),
       expires: P.field(node, 'expires'),
       price: P.field(node, 'price'),
       resetDay: P.field(node, 'resetDay'),
@@ -164,11 +162,6 @@
     b = b || {};
     tr = tr || {};
 
-    if (tr.rx_bytes || tr.tx_bytes) {
-      card.rxTotal.textContent = P.fmtBytes(tr.rx_bytes || 0);
-      card.txTotal.textContent = P.fmtBytes(tr.tx_bytes || 0);
-    }
-
     var used = tr ? (tr.rx_bytes || 0) + (tr.tx_bytes || 0) : 0;
     if (b.quota_bytes != null) {
       card.trafficVal.textContent = P.fmtBytes(used) + ' / ' + P.fmtBytes(b.quota_bytes);
@@ -227,8 +220,8 @@
     card.memVal.textContent = P.fmtBytes(d.mem_used) + ' / ' + P.fmtBytes(d.mem_total);
     card.diskFill.style.width = P.pct(d.disk_used, d.disk_total).toFixed(1) + '%';
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
-    card.rx.textContent = P.rateWithTotal(d.net_rx_bps, entry.traffic ? entry.traffic.rx_bytes : 0);
-    card.tx.textContent = P.rateWithTotal(d.net_tx_bps, entry.traffic ? entry.traffic.tx_bytes : 0);
+    card.rx.textContent = P.fmtRate(d.net_rx_bps);
+    card.tx.textContent = P.fmtRate(d.net_tx_bps);
     card.load.textContent = d.load1.toFixed(2);
     card.uptime.textContent = P.fmtUptime(d.uptime);
   }
