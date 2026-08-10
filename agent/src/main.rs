@@ -89,7 +89,26 @@ fn collect_sysinfo(sys: &System, mem_desc: Option<String>) -> SystemInfo {
         cpu_cores: sys.cpus().len(),
         virtualization: None,
         mem_desc,
+        ips: collect_ips(),
     }
+}
+
+fn collect_ips() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let networks = sysinfo::Networks::new_with_refreshed_list();
+    for (_name, data) in networks.iter() {
+        for net in data.ip_networks() {
+            let addr = net.addr;
+            if addr.is_loopback() || addr.is_unspecified() {
+                continue;
+            }
+            let s = addr.to_string();
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+    }
+    out
 }
 
 /// Best-effort memory module description, e.g. "Samsung 4800MHz". Runs once at
@@ -849,6 +868,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
     let auth = serde_json::to_string(&AgentMsg::Auth {
         token: cfg.token.clone(),
         version: PROTOCOL_VERSION,
+        name: sysinfo::System::host_name(),
     })?;
     write.send(Message::Text(auth)).await?;
 

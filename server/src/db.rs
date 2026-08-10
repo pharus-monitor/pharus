@@ -44,6 +44,13 @@ pub fn init(conn: &Connection) -> Result<()> {
           value TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS users (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          username      TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          created_at    INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS traffic_usage (
           agent_id      INTEGER PRIMARY KEY,
           cycle_start   INTEGER NOT NULL DEFAULT 0,
@@ -156,7 +163,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -200,6 +207,13 @@ fn migrate(conn: &Connection) -> Result<()> {
     if version < 5 {
         add_column(conn, "agents", "bandwidth", "REAL")?;
     }
+    if version < 6 {
+        // Per-host traffic accounting mode and uni-direction pick.
+        add_column(conn, "agents", "traffic_mode", "TEXT")?;
+        add_column(conn, "agents", "traffic_dir", "TEXT")?;
+        // Hostname reported by agents, used to match shared-secret logins.
+        add_column(conn, "agents", "hostname", "TEXT")?;
+    }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
 }
@@ -212,12 +226,31 @@ fn now_ts() -> i64 {
 }
 
 pub fn add_agent(conn: &Connection, name: &str) -> Result<(i64, String)> {
+    add_agent_named(conn, name, None)
+}
+
+pub fn add_agent_named(
+    conn: &Connection,
+    name: &str,
+    hostname: Option<&str>,
+) -> Result<(i64, String)> {
     let token = uuid::Uuid::new_v4().simple().to_string();
     conn.execute(
-        "INSERT INTO agents (name, token, created_at) VALUES (?1, ?2, ?3)",
-        params![name, token, now_ts()],
+        "INSERT INTO agents (name, token, hostname, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![name, token, hostname, now_ts()],
     )?;
     Ok((conn.last_insert_rowid(), token))
+}
+
+pub fn find_agent_by_hostname(conn: &Connection, hostname: &str) -> Result<Option<(i64, String)>> {
+    let row = conn
+        .query_row(
+            "SELECT id, name FROM agents WHERE hostname = ?1 ORDER BY id LIMIT 1",
+            params![hostname],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(row)
 }
 
 pub fn rename_agent(conn: &Connection, id: i64, name: &str) -> Result<usize> {
@@ -288,6 +321,39 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn count_users(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?)
+}
+
+pub fn find_user(conn: &Connection, username: &str) -> Result<Option<(i64, String)>> {
+    let row = conn
+        .query_row(
+            "SELECT id, password_hash FROM users WHERE username = ?1",
+            params![username],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub fn insert_user(conn: &Connection, username: &str, password_hash: &str) -> Result<usize> {
+    Ok(conn.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, created_at) VALUES (?1, ?2, ?3)",
+        params![username, password_hash, now_ts()],
+    )?)
+}
+
+pub fn update_user_password(
+    conn: &Connection,
+    username: &str,
+    password_hash: &str,
+) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE users SET password_hash = ?2 WHERE username = ?1",
+        params![username, password_hash],
+    )?)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TrafficRow {
     pub cycle_start: i64,
@@ -333,7 +399,8 @@ fn cycle_from_str(s: &str) -> Option<BillingCycle> {
 
 pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
     let mut stmt = conn.prepare(
-        "SELECT id, reset_day, quota_bytes, expires_at, price, currency, billing_cycle, bandwidth
+        "SELECT id, reset_day, quota_bytes, expires_at, price, currency, billing_cycle, bandwidth,
+                traffic_mode, traffic_dir
          FROM agents",
     )?;
     let rows = stmt
@@ -351,6 +418,8 @@ pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
                     currency: currency.and_then(|s| currency_from_str(&s)),
                     cycle: cycle.and_then(|s| cycle_from_str(&s)),
                     bandwidth: r.get(7)?,
+                    traffic_mode: r.get::<_, Option<String>>(8)?.filter(|s| !s.is_empty()),
+                    traffic_dir: r.get::<_, Option<String>>(9)?.filter(|s| !s.is_empty()),
                 },
             ))
         })?
@@ -361,7 +430,8 @@ pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
 pub fn set_billing(conn: &Connection, agent_id: i64, b: &BillingInfo) -> Result<usize> {
     let rows = conn.execute(
         "UPDATE agents SET reset_day = ?2, quota_bytes = ?3, expires_at = ?4,
-         price = ?5, currency = ?6, billing_cycle = ?7, bandwidth = ?8 WHERE id = ?1",
+         price = ?5, currency = ?6, billing_cycle = ?7, bandwidth = ?8,
+         traffic_mode = ?9, traffic_dir = ?10 WHERE id = ?1",
         params![
             agent_id,
             b.reset_day.map(|v| v as i64),
@@ -371,6 +441,8 @@ pub fn set_billing(conn: &Connection, agent_id: i64, b: &BillingInfo) -> Result<
             b.currency.map(currency_to_str),
             b.cycle.map(cycle_to_str),
             b.bandwidth,
+            b.traffic_mode.as_deref(),
+            b.traffic_dir.as_deref(),
         ],
     )?;
     Ok(rows)

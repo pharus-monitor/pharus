@@ -15,6 +15,9 @@ pub struct SystemInfo {
     /// agent could not read it (no dmidecode / WMI access).
     #[serde(default)]
     pub mem_desc: Option<String>,
+    /// Non-loopback IPv4/IPv6 addresses reported by the agent.
+    #[serde(default)]
+    pub ips: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +67,12 @@ pub struct BillingInfo {
     /// Manual bandwidth cap in Mbps.
     #[serde(default)]
     pub bandwidth: Option<f64>,
+    /// Per-host traffic accounting mode; falls back to "bi" when absent.
+    #[serde(default)]
+    pub traffic_mode: Option<String>,
+    /// Per-host uni-directional traffic pick; falls back to "down" when absent.
+    #[serde(default)]
+    pub traffic_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,7 +178,15 @@ pub struct UnlockResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMsg {
-    Auth { token: String, version: u8 },
+    Auth {
+        token: String,
+        version: u8,
+        /// Hostname reported by the agent, used to match a connection that
+        /// authenticates with the shared `agent_secret` instead of a
+        /// per-agent token.
+        #[serde(default)]
+        name: Option<String>,
+    },
     SysInfo { info: SystemInfo },
     Metrics { data: Metrics },
     Ping { results: Vec<PingResult> },

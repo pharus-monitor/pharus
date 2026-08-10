@@ -68,15 +68,13 @@
       pingSection: P.field(node, 'pingSection'),
       pings: P.field(node, 'pings'),
       unlockSection: P.field(node, 'unlockSection'),
-      unlock: P.field(node, 'unlock'),
-      detailBtn: P.field(node, 'detailBtn')
+      unlock: P.field(node, 'unlock')
     };
+    card.ips4 = P.field(node, 'ips4');
+    card.ips6 = P.field(node, 'ips6');
+    card.ipRow = node.querySelector('.ip-row');
     node.addEventListener('click', function (ev) {
       if (ev.target.closest('button')) return;
-      openHost(id);
-    });
-    card.detailBtn.addEventListener('click', function (ev) {
-      ev.stopPropagation();
       openHost(id);
     });
     cards.set(id, card);
@@ -205,8 +203,6 @@
   }
 
   var expiryAlertDays = 3;
-  var trafficMode = 'bi';
-  var trafficDir = 'down';
 
   function renderHeader() {
     var online = 0;
@@ -278,8 +274,10 @@
 
     var rx = tr ? (tr.rx_bytes || 0) : 0;
     var tx = tr ? (tr.tx_bytes || 0) : 0;
-    var used = trafficMode === 'uni'
-      ? (trafficDir === 'up' ? tx : trafficDir === 'max' ? Math.max(rx, tx) : rx)
+    var bmode = b.traffic_mode || 'bi';
+    var bdir = b.traffic_dir || 'down';
+    var used = bmode === 'uni'
+      ? (bdir === 'up' ? tx : bdir === 'max' ? Math.max(rx, tx) : rx)
       : (rx + tx);
     if (b.quota_bytes != null) {
       card.trafficVal.textContent = P.fmtBytes(used) + ' / ' + P.fmtBytes(b.quota_bytes);
@@ -345,8 +343,31 @@
     renderRegion(card, entry);
     renderPings(card, entry);
     renderUnlock(card, entry);
+    renderIps(card, entry);
     renderAgentLayout();
     renderHeader();
+  }
+
+  function renderIps(card, entry) {
+    var ips = (entry.info && Array.isArray(entry.info.ips)) ? entry.info.ips : [];
+    var v4 = null, v6 = null;
+    ips.forEach(function (ip) {
+      var s = String(ip);
+      if (s.indexOf(':') >= 0) {
+        if (!v6 && !P.isLinkLocalV6(s)) v6 = s;
+      } else if (!v4) {
+        v4 = s;
+      }
+    });
+    if (!v4 && !v6) {
+      card.ips4.textContent = '';
+      card.ips6.textContent = '';
+      card.ipRow.hidden = true;
+      return;
+    }
+    card.ipRow.hidden = false;
+    card.ips4.textContent = v4 ? P.maskIp(v4) : '';
+    card.ips6.textContent = v6 ? P.maskIp(v6) : '';
   }
 
   function handleMessage(msg) {
@@ -406,8 +427,6 @@
     // 404 = admin API disabled on this server; 401/200 = enabled
     P.requestJson('/api/meta').then(function (meta) {
       if (meta.expiry_alert_days) expiryAlertDays = meta.expiry_alert_days;
-      if (meta.traffic_mode) trafficMode = meta.traffic_mode;
-      if (meta.traffic_dir) trafficDir = meta.traffic_dir;
       state.forEach(function (entry, id) {
         renderBilling(ensureCard(id), entry);
       });
@@ -425,6 +444,9 @@
   /* ---------- boot: language first, then live data ---------- */
   P.ready().then(function () {
     P.initTheme();
+    P.requestJson('/api/status').then(function (agents) {
+      (Array.isArray(agents) ? agents : []).forEach(applySnapshot);
+    }).catch(function () {});
     P.connectStream(handleMessage);
     probeAdminLink();
   });

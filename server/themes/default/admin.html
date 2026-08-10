@@ -11,12 +11,29 @@
 
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
-      <div class="brand host-brand">
-        <h1 data-i18n="admin.title">管理中心</h1>
-        <p data-i18n="admin.subtitle">配置告警、通知、任务、区域和功能开关</p>
+      <div class="beacon" aria-hidden="true">
+        <svg viewBox="0 0 48 48" class="beacon-svg">
+          <defs>
+            <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#fbbf24" stop-opacity="0.55"/>
+              <stop offset="1" stop-color="#fbbf24" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g class="beacon-sweep">
+            <path d="M24 9 L46 4 L46 14 Z" fill="url(#beam)"/>
+          </g>
+          <path d="M24 3 L20.5 12 h7 Z" fill="#fbbf24"/>
+          <path d="M19.5 13 h9 L31 44 H17 Z" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M19 22 h10 M18 32 h12" stroke="#fbbf24" stroke-width="1.4" opacity="0.45"/>
+          <circle cx="24" cy="17.5" r="2.2" fill="#fde68a"/>
+        </svg>
+      </div>
+      <div class="brand">
+        <h1>Pharus</h1>
+        <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
       </div>
       <div class="header-right">
+        <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
         <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
         <span id="conn" class="conn-badge conn-down" role="status">
           <span class="conn-dot"></span>Connecting…
@@ -31,10 +48,14 @@
     <section class="admin-login" id="login-view" hidden>
       <div class="admin-login-card">
         <h2 data-i18n="admin.login">管理员登录</h2>
-        <p class="admin-login-hint" data-i18n="admin.loginHint">输入管理 Token 进入管理中心</p>
+        <p class="admin-login-hint" data-i18n="admin.loginHint">输入管理员账号进入管理中心</p>
         <label class="field">
-          <span data-i18n="admin.token">管理 Token</span>
-          <input type="password" id="login-token" autocomplete="off" />
+          <span data-i18n="admin.username">用户名</span>
+          <input type="text" id="login-username" autocomplete="username" />
+        </label>
+        <label class="field">
+          <span data-i18n="admin.password">密码</span>
+          <input type="password" id="login-password" autocomplete="current-password" />
         </label>
         <p class="modal-err" id="login-err" hidden></p>
         <div class="modal-actions">
@@ -63,7 +84,7 @@
     <section class="admin-login" id="disabled-view" hidden>
       <div class="admin-login-card">
         <h2 data-i18n="admin.disabled">管理未启用</h2>
-        <p data-i18n="admin.disabledHint">服务器未设置 PHARUS_ADMIN_TOKEN，管理接口不可用。</p>
+        <p data-i18n="admin.disabledHint">服务器未设置 PHARUS_ADMIN_PASSWORD，管理接口不可用。</p>
         <div class="modal-actions"><a class="btn ghost" href="index.html" data-i18n="admin.cancel">返回</a></div>
       </div>
     </section>
@@ -102,7 +123,8 @@
       var loginView = document.getElementById('login-view');
       var disabledView = document.getElementById('disabled-view');
       var adminRoot = document.getElementById('admin-root');
-      var loginToken = document.getElementById('login-token');
+      var loginUsername = document.getElementById('login-username');
+      var loginPassword = document.getElementById('login-password');
       var loginErr = document.getElementById('login-err');
       var loginSubmit = document.getElementById('login-submit');
       var adminController = null;
@@ -141,9 +163,19 @@
         }).then(function (r) { return r.status; }).catch(function () { return 0; });
       }
 
+      function doLogin(username, password) {
+        return fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: username, password: password })
+        }).then(function (r) {
+          return r.json().then(function (body) { return { status: r.status, body: body }; });
+        }).catch(function () { return { status: 0, body: {} }; });
+      }
+
       function enterAdmin(tok) {
         adminToken = tok;
-        sessionStorage.setItem('pharus.admin', tok);
+        localStorage.setItem('pharus.admin', tok);
         loginView.hidden = true;
         adminRoot.hidden = false;
         if (!adminController) {
@@ -167,10 +199,11 @@
 
       function logout() {
         adminToken = null;
-        sessionStorage.removeItem('pharus.admin');
+        localStorage.removeItem('pharus.admin');
         if (adminController) { adminController.setVisible(false); }
         adminRoot.hidden = true;
-        loginToken.value = '';
+        loginUsername.value = '';
+        loginPassword.value = '';
         loginErr.hidden = true;
         loginView.hidden = false;
       }
@@ -198,42 +231,49 @@
           }
         });
 
-        checkToken(null).then(function (status) {
-          if (status === 404 || status === 0) {
+        P.fetchMeta().then(function (meta) {
+          if (!meta || !meta.admin_enabled) {
             loginView.hidden = true;
             disabledView.hidden = false;
             return;
           }
-          var saved = sessionStorage.getItem('pharus.admin');
+          var saved = localStorage.getItem('pharus.admin');
           if (!saved) {
             loginView.hidden = false;
-            loginToken.focus();
+            loginUsername.focus();
             return;
           }
           checkToken(saved).then(function (st) {
             if (st === 200) enterAdmin(saved);
-            else sessionStorage.removeItem('pharus.admin'), loginView.hidden = false;
+            else {
+              localStorage.removeItem('pharus.admin');
+              loginView.hidden = false;
+              loginUsername.focus();
+            }
           });
         });
       }
 
       loginSubmit.addEventListener('click', function () {
-        var tok = loginToken.value.trim();
-        if (!tok) return;
+        var u = loginUsername.value.trim();
+        var p = loginPassword.value;
+        if (!u || !p) return;
         loginSubmit.disabled = true;
-        checkToken(tok).then(function (st) {
+        doLogin(u, p).then(function (res) {
           loginSubmit.disabled = false;
-          if (st === 200) {
-            enterAdmin(tok);
+          if (res.status === 200 && res.body && res.body.token) {
+            enterAdmin(res.body.token);
           } else {
             loginErr.textContent = P.t('admin.unauthorized');
             loginErr.hidden = false;
           }
         });
       });
-      loginToken.addEventListener('keydown', function (ev) {
+      function loginKey(ev) {
         if (ev.key === 'Enter') loginSubmit.click();
-      });
+      }
+      loginUsername.addEventListener('keydown', loginKey);
+      loginPassword.addEventListener('keydown', loginKey);
       document.addEventListener('keydown', function (ev) {
         if (ev.key === 'Escape') {
           document.getElementById('entity-modal').hidden = true;

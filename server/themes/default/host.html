@@ -11,8 +11,29 @@
 
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
+      <div class="beacon" aria-hidden="true">
+        <svg viewBox="0 0 48 48" class="beacon-svg">
+          <defs>
+            <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#fbbf24" stop-opacity="0.55"/>
+              <stop offset="1" stop-color="#fbbf24" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g class="beacon-sweep">
+            <path d="M24 9 L46 4 L46 14 Z" fill="url(#beam)"/>
+          </g>
+          <path d="M24 3 L20.5 12 h7 Z" fill="#fbbf24"/>
+          <path d="M19.5 13 h9 L31 44 H17 Z" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M19 22 h10 M18 32 h12" stroke="#fbbf24" stroke-width="1.4" opacity="0.45"/>
+          <circle cx="24" cy="17.5" r="2.2" fill="#fde68a"/>
+        </svg>
+      </div>
+      <div class="brand">
+        <h1>Pharus</h1>
+        <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
+      </div>
       <div class="header-right">
+        <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
         <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
         <button id="edit-mode-btn" class="view-toggle" type="button" hidden data-i18n="admin.edit">编辑</button>
         <a id="admin-link" class="admin-link" href="admin.html" hidden data-i18n="nav.admin">管理</a>
@@ -55,9 +76,9 @@
           <label class="field compact">
             <span data-i18n="common.range">时间范围</span>
             <select id="ping-range">
-              <option value="1h" data-i18n="range.1h">1 小时</option>
+              <option value="1h" selected data-i18n="range.1h">1 小时</option>
               <option value="6h" data-i18n="range.6h">6 小时</option>
-              <option value="24h" selected data-i18n="range.24h">24 小时</option>
+              <option value="24h" data-i18n="range.24h">24 小时</option>
               <option value="7d" data-i18n="range.7d">7 天</option>
             </select>
           </label>
@@ -66,6 +87,7 @@
         <div class="chart-wrap" id="ping-chart-wrap">
           <canvas id="ping-chart" role="img" data-i18n-aria="ping.chartAria" aria-label="延迟历史折线图"></canvas>
           <div class="chart-tip" id="ping-tip" hidden></div>
+          <div class="ping-guide" id="ping-guide" hidden></div>
         </div>
         <div class="chart-legend" id="ping-legend"></div>
         <div class="loss-summary" id="ping-loss"></div>
@@ -128,6 +150,13 @@
             <button class="rename-ic" id="rename-btn" type="button" hidden aria-label="改名" title="改名" data-i18n-aria="admin.rename">✏️</button>
           </div>
           <p data-f="os">—</p>
+          <div class="ip-row">
+            <div class="ip-list">
+              <span class="ip-value" data-f="ips4"></span>
+              <span class="ip-value" data-f="ips6"></span>
+            </div>
+            <button class="eye-btn" data-f="ipsToggle" type="button" hidden data-i18n-aria="host.showIp" aria-label="显示 IP" title="显示 IP">👁</button>
+          </div>
         </div>
         <div class="card-badges">
           <span class="region-pill" data-f="region" hidden></span>
@@ -165,17 +194,17 @@
           </div>
           <div class="meter">
             <div class="meter-head">
-              <span class="meter-label" data-i18n="meter.disk">Disk</span>
-              <span class="meter-value" data-f="diskVal">—</span>
-            </div>
-            <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
-          </div>
-          <div class="meter">
-            <div class="meter-head">
               <span class="meter-label" data-i18n="meter.swap">Swap</span>
               <span class="meter-value" data-f="swapVal">—</span>
             </div>
             <div class="meter-track"><div class="meter-fill swap" data-f="swapFill"></div></div>
+          </div>
+          <div class="meter">
+            <div class="meter-head">
+              <span class="meter-label" data-i18n="meter.disk">Disk</span>
+              <span class="meter-value" data-f="diskVal">—</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
           </div>
         </div>
       </div>
@@ -242,8 +271,12 @@
         <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
       </div>
       <label class="field">
-        <span data-i18n="admin.token">管理 Token</span>
-        <input type="password" id="token-input" autocomplete="off" />
+        <span data-i18n="admin.username">用户名</span>
+        <input type="text" id="token-username" autocomplete="username" />
+      </label>
+      <label class="field">
+        <span data-i18n="admin.password">密码</span>
+        <input type="password" id="token-input" autocomplete="current-password" />
       </label>
       <p class="modal-err" id="token-err" hidden></p>
       <div class="modal-actions">

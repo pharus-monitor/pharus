@@ -210,6 +210,12 @@ impl Evaluator {
         if previous == status.firing {
             return;
         }
+        tracing::info!(
+            rule_id = rule.id,
+            agent_id = agent.id,
+            firing = status.firing,
+            "alert transition"
+        );
 
         let persisted = AlertStateRow {
             firing: status.firing,

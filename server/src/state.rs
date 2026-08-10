@@ -64,7 +64,9 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub browser_tx: broadcast::Sender<BrowserMsg>,
     pub themes_root: PathBuf,
-    pub admin_token: Option<String>,
+    /// Active admin sessions: session token -> (username, creation time).
+    /// In-memory only, lost on restart; admins must re-login.
+    pub sessions: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Pending one-shot waiters for task results keyed by task_id.
     pub task_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<pharus_common::AgentMsg>>>,
     /// In-flight browser-initiated diagnostics keyed by request_id.

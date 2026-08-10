@@ -2,7 +2,7 @@ use crate::api::err;
 use crate::state::SharedState;
 use crate::{billing, crypto, db, diag, features, notify, regions};
 use axum::{
-    extract::{Path, Query, Request, State},
+    extract::{Extension, Path, Query, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
@@ -14,7 +14,7 @@ use pharus_common::{
     AgentMsg, BillingCycle, BillingInfo, BrowserMsg, Currency, ServerToAgentMsg, TaskKind,
     TrafficUsage,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ const CHANNEL_KINDS: &[&str] = &[
 const ALERT_METRICS: &[&str] = &["cpu", "mem", "disk", "load", "traffic"];
 
 pub fn router(state: SharedState) -> Router<SharedState> {
-    Router::new()
+    let protected = Router::new()
         .route("/api/admin/check", post(check))
         .route("/api/admin/agents", get(list_agents))
         .route("/api/admin/agents/:id/billing", put(update_billing))
@@ -65,24 +65,148 @@ pub fn router(state: SharedState) -> Router<SharedState> {
         )
         .route("/api/admin/channels/:id/test", post(test_channel))
         .route("/api/admin/settings", put(update_setting))
-        .route_layer(middleware::from_fn_with_state(state, require_admin))
+        .route(
+            "/api/admin/agent-secrets",
+            get(list_agent_secrets).put(save_agent_secrets),
+        )
+        .route("/api/admin/password", put(update_password))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
+    Router::new()
+        .route("/api/admin/login", post(login))
+        .route("/api/admin/logout", post(logout))
+        .merge(protected)
 }
 
-async fn require_admin(State(state): State<SharedState>, req: Request, next: Next) -> Response {
-    let Some(expected) = &state.admin_token else {
-        return err(StatusCode::NOT_FOUND, "admin api disabled");
+#[derive(Clone)]
+struct AdminSession(String);
+
+const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+
+async fn require_admin(State(state): State<SharedState>, mut req: Request, next: Next) -> Response {
+    let token = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let Some(token) = token else {
+        return err(StatusCode::UNAUTHORIZED, "missing bearer token");
     };
-    let ok = req
+    let username = {
+        let mut sessions = state.sessions.lock().unwrap();
+        let Some((username, created)) = sessions.get(token) else {
+            return err(StatusCode::UNAUTHORIZED, "invalid session");
+        };
+        if created.elapsed() > SESSION_TTL {
+            sessions.remove(token);
+            return err(StatusCode::UNAUTHORIZED, "session expired");
+        }
+        username.clone()
+    };
+    req.extensions_mut().insert(AdminSession(username));
+    next.run(req).await
+}
+
+pub fn hash_password(pw: &str) -> anyhow::Result<String> {
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
+    let salt = SaltString::generate(&mut OsRng);
+    Ok(Argon2::default()
+        .hash_password(pw.as_bytes(), &salt)
+        .map_err(anyhow::Error::msg)?
+        .to_string())
+}
+
+fn verify_password(pw: &str, hash: &str) -> bool {
+    use argon2::password_hash::PasswordHash;
+    use argon2::{Argon2, PasswordVerifier};
+    let Ok(parsed) = PasswordHash::new(hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(pw.as_bytes(), &parsed)
+        .is_ok()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginBody {
+    pub username: String,
+    pub password: String,
+}
+
+async fn login(State(state): State<SharedState>, Json(body): Json<LoginBody>) -> Response {
+    let record = {
+        let conn = state.db.lock().unwrap();
+        match db::find_user(&conn, &body.username) {
+            Ok(r) => r,
+            Err(e) => return db_err(e),
+        }
+    };
+    let Some((_id, hash)) = record else {
+        return err(StatusCode::UNAUTHORIZED, "invalid credentials");
+    };
+    if !verify_password(&body.password, &hash) {
+        return err(StatusCode::UNAUTHORIZED, "invalid credentials");
+    }
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .insert(token.clone(), (body.username.clone(), std::time::Instant::now()));
+    Json(serde_json::json!({ "token": token })).into_response()
+}
+
+async fn logout(State(state): State<SharedState>, req: Request) -> Response {
+    let token = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| t == expected)
-        .unwrap_or(false);
-    if !ok {
-        return err(StatusCode::UNAUTHORIZED, "invalid admin token");
+        .map(|s| s.to_string());
+    if let Some(token) = token {
+        state.sessions.lock().unwrap().remove(&token);
     }
-    next.run(req).await
+    StatusCode::OK.into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordBody {
+    pub old_password: String,
+    pub new_password: String,
+}
+
+async fn update_password(
+    State(state): State<SharedState>,
+    Extension(session): Extension<AdminSession>,
+    Json(body): Json<PasswordBody>,
+) -> Response {
+    let username = session.0;
+    let hash = {
+        let conn = state.db.lock().unwrap();
+        match db::find_user(&conn, &username) {
+            Ok(Some((_, h))) => h,
+            Ok(None) => return err(StatusCode::UNAUTHORIZED, "user not found"),
+            Err(e) => return db_err(e),
+        }
+    };
+    if !verify_password(&body.old_password, &hash) {
+        return err(StatusCode::UNAUTHORIZED, "invalid current password");
+    }
+    if body.new_password.is_empty() {
+        return bad("new password must not be empty");
+    }
+    let new_hash = match hash_password(&body.new_password) {
+        Ok(h) => h,
+        Err(e) => return db_err(e),
+    };
+    {
+        let conn = state.db.lock().unwrap();
+        if let Err(e) = db::update_user_password(&conn, &username, &new_hash) {
+            return db_err(e);
+        }
+    }
+    StatusCode::OK.into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,17 +225,18 @@ async fn update_setting(
             _ => {
                 return bad("expiry_alert_days must be a number within 1..=365");
             }
-        },
-        "traffic_mode" => {
-            if body.value != "bi" && body.value != "uni" {
-                return bad("traffic_mode must be bi or uni");
+        }
+        "default_language" => {
+            if !matches!(body.value.as_str(), "en" | "zh-CN" | "ja" | "ru") {
+                return bad("default_language must be en, zh-CN, ja or ru");
             }
         }
-        "traffic_dir" => {
-            if !matches!(body.value.as_str(), "up" | "down" | "max") {
-                return bad("traffic_dir must be up, down or max");
+        "agent_secret" => {
+            if body.value.trim().is_empty() {
+                return bad("agent_secret must not be empty");
             }
         }
+        "site_name" | "site_url" => {}
         _ => return bad("unknown setting key"),
     }
     {
@@ -123,9 +248,67 @@ async fn update_setting(
     StatusCode::OK.into_response()
 }
 
-/// Token probe for the frontend: reaching this handler means the token is valid.
+/// Session probe for the frontend: reaching this handler means the bearer
+/// token is a valid admin session.
 async fn check() -> StatusCode {
     StatusCode::OK
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSecretEntry {
+    pub secret: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+pub fn load_agent_secrets(conn: &rusqlite::Connection) -> Vec<AgentSecretEntry> {
+    db::get_setting(conn, "agent_secrets")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+async fn list_agent_secrets(State(state): State<SharedState>) -> Response {
+    let list = {
+        let conn = state.db.lock().unwrap();
+        load_agent_secrets(&conn)
+    };
+    Json(list).into_response()
+}
+
+async fn save_agent_secrets(
+    State(state): State<SharedState>,
+    Json(body): Json<Vec<AgentSecretEntry>>,
+) -> Response {
+    let mut cleaned: Vec<AgentSecretEntry> = Vec::new();
+    for entry in body {
+        let secret = entry.secret.trim().to_string();
+        if secret.is_empty() {
+            return bad("secret must not be empty");
+        }
+        if secret.len() < 6 {
+            return bad("secret must be at least 6 characters");
+        }
+        if cleaned.iter().any(|e: &AgentSecretEntry| e.secret == secret) {
+            return bad("duplicate secret");
+        }
+        cleaned.push(AgentSecretEntry {
+            secret,
+            note: entry.note,
+        });
+    }
+    let json = match serde_json::to_string(&cleaned) {
+        Ok(j) => j,
+        Err(_) => return bad("invalid secrets"),
+    };
+    {
+        let conn = state.db.lock().unwrap();
+        if let Err(e) = db::set_setting(&conn, "agent_secrets", &json) {
+            return db_err(e);
+        }
+    }
+    StatusCode::OK.into_response()
 }
 
 fn db_err(e: impl std::fmt::Display) -> Response {
@@ -926,6 +1109,8 @@ pub struct BillingUpdate {
     pub currency: Option<Currency>,
     pub cycle: Option<BillingCycle>,
     pub bandwidth: Option<f64>,
+    pub traffic_mode: Option<String>,
+    pub traffic_dir: Option<String>,
 }
 
 async fn update_billing(
@@ -953,6 +1138,16 @@ async fn update_billing(
             return bad("bandwidth must be positive (Mbps)");
         }
     }
+    if let Some(mode) = &body.traffic_mode {
+        if mode != "bi" && mode != "uni" {
+            return bad("traffic_mode must be bi or uni");
+        }
+    }
+    if let Some(dir) = &body.traffic_dir {
+        if !matches!(dir.as_str(), "up" | "down" | "max") {
+            return bad("traffic_dir must be up, down or max");
+        }
+    }
     let expires_at = match &body.expires_on {
         Some(s) => {
             let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") else {
@@ -977,6 +1172,8 @@ async fn update_billing(
         currency: body.currency,
         cycle: body.cycle,
         bandwidth: body.bandwidth,
+        traffic_mode: body.traffic_mode,
+        traffic_dir: body.traffic_dir,
     };
 
     let rows = {

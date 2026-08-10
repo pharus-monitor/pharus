@@ -26,8 +26,12 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
         }
     };
 
-    let token = match serde_json::from_str::<AgentMsg>(&auth_msg) {
-        Ok(AgentMsg::Auth { token, version }) if version == PROTOCOL_VERSION => token,
+    let (token, auth_name) = match serde_json::from_str::<AgentMsg>(&auth_msg) {
+        Ok(AgentMsg::Auth {
+            token,
+            version,
+            name,
+        }) if version == PROTOCOL_VERSION => (token, name),
         Ok(AgentMsg::Auth { .. }) => {
             let _ = write
                 .send(Message::Text(
@@ -54,7 +58,36 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
 
     let found = {
         let db = state.db.lock().unwrap();
-        crate::db::find_by_token(&db, &token)
+        match crate::db::find_by_token(&db, &token) {
+            Ok(Some(pair)) => Ok(Some(pair)),
+            Ok(None) => {
+                // Fall back to one of the shared agent secrets configured in
+                // site settings; the agent is then matched (or auto-registered)
+                // by its reported hostname.
+                let secret_ok = {
+                    let single = crate::db::get_setting(&db, "agent_secret").ok().flatten();
+                    let list = crate::admin::load_agent_secrets(&db);
+                    single.as_deref() == Some(token.as_str())
+                        || list.iter().any(|e| e.secret == token)
+                };
+                if !secret_ok {
+                    Ok(None)
+                } else {
+                    let host = auth_name.as_deref().unwrap_or("").trim();
+                    if host.is_empty() {
+                        Ok(None)
+                    } else {
+                        match crate::db::find_agent_by_hostname(&db, host) {
+                            Ok(Some(pair)) => Ok(Some(pair)),
+                            Ok(None) => crate::db::add_agent_named(&db, host, Some(host))
+                                .map(|(id, _t)| Some((id, host.to_string()))),
+                            Err(e) => Err(e),
+                        }
+                    }
+                }
+            }
+            Err(e) => Err(e),
+        }
     };
     let (agent_id, name) = match found {
         Ok(Some(pair)) => pair,
@@ -143,10 +176,23 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                 };
                 match serde_json::from_str::<AgentMsg>(&msg) {
                     Ok(AgentMsg::SysInfo { info }) => {
-                        let mut agents = state.agents.write().unwrap();
-                        if let Some(a) = agents.get_mut(&agent_id) {
-                            a.info = Some(info);
+                        {
+                            let mut agents = state.agents.write().unwrap();
+                            if let Some(a) = agents.get_mut(&agent_id) {
+                                a.info = Some(info);
+                            }
                         }
+                        // Push the updated snapshot so the UI picks up host
+                        // info and reported IPs even when they arrive after
+                        // the initial connection snapshot.
+                        let agents_list = {
+                            let agents = state.agents.read().unwrap();
+                            agents
+                                .iter()
+                                .map(|(id, a)| a.snapshot(*id))
+                                .collect::<Vec<_>>()
+                        };
+                        state.broadcast(BrowserMsg::Snapshot { agents: agents_list });
                     }
                     Ok(AgentMsg::Metrics { data }) => {
                         {

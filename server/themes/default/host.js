@@ -22,6 +22,7 @@
   var pingLegend = document.getElementById('ping-legend');
   var pingLoss = document.getElementById('ping-loss');
   var pingTip = document.getElementById('ping-tip');
+  var pingGuide = document.getElementById('ping-guide');
   var diagTarget = document.getElementById('diag-target');
   var diagCycles = document.getElementById('diag-cycles');
   var diagPing = document.getElementById('diag-ping');
@@ -35,6 +36,7 @@
   var editModeBtn = document.getElementById('edit-mode-btn');
   var tokenModal = document.getElementById('token-modal');
   var tokenInput = document.getElementById('token-input');
+  var tokenUsername = document.getElementById('token-username');
   var tokenErr = document.getElementById('token-err');
   var editModal = document.getElementById('edit-modal');
   var editTitle = document.getElementById('edit-title');
@@ -80,8 +82,6 @@
   var adminToken = null;
   var adminOn = false;
   var editingId = null;
-  var trafficMode = 'bi';
-  var trafficDir = 'down';
   var lastChart = null;
 
   /* ---------- host card ---------- */
@@ -119,6 +119,15 @@
       unlock: P.field(node, 'unlock'),
       editBtn: P.field(node, 'editBtn')
     };
+    card.ips4 = P.field(node, 'ips4');
+    card.ips6 = P.field(node, 'ips6');
+    card.ipRow = node.querySelector('.ip-row');
+    card.ipsToggle = P.field(node, 'ipsToggle');
+    card.ipsShown = false;
+    card.ipsToggle.addEventListener('click', function () {
+      card.ipsShown = !card.ipsShown;
+      renderIps();
+    });
     card.renameBtn = node.querySelector('#rename-btn');
     card.editBtn.addEventListener('click', function () { openEdit(hostId); });
     card.renameBtn.addEventListener('click', function () {
@@ -216,8 +225,10 @@
 
     var rx = tr ? (tr.rx_bytes || 0) : 0;
     var tx = tr ? (tr.tx_bytes || 0) : 0;
-    var used = trafficMode === 'uni'
-      ? (trafficDir === 'up' ? tx : trafficDir === 'max' ? Math.max(rx, tx) : rx)
+    var bmode = b.traffic_mode || 'bi';
+    var bdir = b.traffic_dir || 'down';
+    var used = bmode === 'uni'
+      ? (bdir === 'up' ? tx : bdir === 'max' ? Math.max(rx, tx) : rx)
       : (rx + tx);
     if (b.quota_bytes != null) {
       card.trafficVal.textContent = P.fmtBytes(used) + ' / ' + P.fmtBytes(b.quota_bytes);
@@ -285,6 +296,31 @@
     card.uptime.textContent = P.fmtUptime(d.uptime);
   }
 
+  function renderIps() {
+    var ips = (entry.info && Array.isArray(entry.info.ips)) ? entry.info.ips : [];
+    var v4 = null, v6 = null;
+    ips.forEach(function (ip) {
+      var s = String(ip);
+      if (s.indexOf(':') >= 0) {
+        if (!v6 && !P.isLinkLocalV6(s)) v6 = s;
+      } else if (!v4) {
+        v4 = s;
+      }
+    });
+    if (!v4 && !v6) {
+      card.ips4.textContent = '';
+      card.ips6.textContent = '';
+      card.ipRow.hidden = true;
+      return;
+    }
+    card.ipRow.hidden = false;
+    card.ipsToggle.hidden = !adminOn;
+    var shown = adminOn && card.ipsShown;
+    card.ips4.textContent = v4 ? (shown ? v4 : P.maskIp(v4)) : '';
+    card.ips6.textContent = v6 ? (shown ? v6 : P.maskIp(v6)) : '';
+    card.ipsToggle.textContent = shown ? '🙈' : '👁';
+  }
+
   function renderAll() {
     if (!card) card = buildCard();
     card.name.textContent = entry.name || ('Agent #' + hostId);
@@ -296,6 +332,7 @@
     renderRegion();
     renderPings();
     renderUnlock();
+    renderIps();
     updatePingGate();
     updateDiagGate();
     updateStreamingGate();
@@ -400,12 +437,13 @@
     var rtts = points.map(function (point) { return Number(point.rtt_avg); }).filter(Number.isFinite);
     var maxRtt = rtts.length ? Math.max.apply(null, rtts) : 1;
     maxRtt = Math.max(10, Math.ceil(maxRtt / 10) * 10);
-    var left = 42, right = 12, top = 12, plotBottom = rect.height - 52;
+    var allTasks = pingTask.value === '';
+    var left = 42, right = 12, top = 12, plotBottom = rect.height - (allTasks ? 26 : 52);
     var plotWidth = Math.max(1, rect.width - left - right);
     var plotHeight = Math.max(1, plotBottom - top);
     var xAt = function (ts) { return left + (Number(ts) - minTs) / (maxTs - minTs) * plotWidth; };
     var yAt = function (rtt) { return top + (1 - Number(rtt) / maxRtt) * plotHeight; };
-    lastChart = { points: points, tasks: tasks, minTs: minTs, maxTs: maxTs, xAt: xAt, left: left, plotWidth: plotWidth };
+    lastChart = { points: points, tasks: tasks, minTs: minTs, maxTs: maxTs, xAt: xAt, left: left, top: top, plotBottom: plotBottom, plotWidth: plotWidth };
 
     ctx.lineWidth = 1;
     ctx.font = '10px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
@@ -428,9 +466,8 @@
     ctx.textAlign = 'right';
     ctx.fillText(formatChartTime(maxTs), rect.width - right, rect.height - 5);
     ctx.textAlign = 'left';
-    ctx.fillText(t('ping.lossAxis'), left, rect.height - 38);
+    if (!allTasks) ctx.fillText(t('ping.lossAxis'), left, rect.height - 38);
 
-    var summaries = [];
     tasks.forEach(function (task, taskIndex) {
       var color = CHART_COLORS[taskIndex % CHART_COLORS.length];
       var series = points.filter(function (point) { return String(point.task_id) === String(task.id); })
@@ -449,7 +486,7 @@
         if (!drawing) { ctx.moveTo(x, y); drawing = true; } else { ctx.lineTo(x, y); }
       });
       ctx.stroke();
-      series.forEach(function (point) {
+      if (!allTasks) series.forEach(function (point) {
         var loss = Math.max(0, Math.min(1, Number(point.loss) || 0));
         if (!loss) return;
         var x = xAt(point.ts);
@@ -475,10 +512,7 @@
       legend.appendChild(swatch);
       legend.appendChild(label);
       pingLegend.appendChild(legend);
-      var averageLoss = series.reduce(function (sum, point) { return sum + (Number(point.loss) || 0); }, 0) / series.length;
-      summaries.push((task.label || ('#' + task.id)) + ': ' + (averageLoss * 100).toFixed(1) + '%');
     });
-    pingLoss.textContent = t('ping.avgLoss') + ' · ' + summaries.join('  |  ');
   }
 
   /* ---------- diagnostics ---------- */
@@ -668,31 +702,37 @@
   }
 
   /* ---------- ws ---------- */
+  function applySnapshot(a) {
+    return {
+      agent_id: a.agent_id,
+      online: a.online,
+      data: a.data,
+      name: a.name,
+      info: a.info,
+      billing: a.billing || null,
+      traffic: a.traffic || null,
+      pings: Array.isArray(a.pings) ? a.pings : [],
+      unlock: Array.isArray(a.unlock) ? a.unlock : [],
+      region: a.region || null,
+      features: Array.isArray(a.features) ? a.features.slice() : null
+    };
+  }
+
+  function applyHost(agent) {
+    entry = agent;
+    renderAll();
+    loadPingHistory(false);
+    loadStreaming();
+  }
+
   function handleMessage(msg) {
     if (msg.type === 'snapshot') {
       var found = null;
       msg.agents.forEach(function (a) {
-        if (a.agent_id === hostId) {
-          found = {
-            agent_id: a.agent_id,
-            online: a.online,
-            data: a.data,
-            name: a.name,
-            info: a.info,
-            billing: a.billing || null,
-            traffic: a.traffic || null,
-            pings: Array.isArray(a.pings) ? a.pings : [],
-            unlock: Array.isArray(a.unlock) ? a.unlock : [],
-            region: a.region || null,
-            features: Array.isArray(a.features) ? a.features.slice() : null
-          };
-        }
+        if (a.agent_id === hostId) found = applySnapshot(a);
       });
       if (found) {
-        entry = found;
-        renderAll();
-        loadPingHistory(false);
-        loadStreaming();
+        applyHost(found);
       } else {
         if (card) card.name.textContent = 'Agent #' + hostId;
       }
@@ -744,16 +784,27 @@
     }).then(function (r) { return r.status; }).catch(function () { return 0; });
   }
 
+  function doLogin(username, password) {
+    return fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    }).then(function (r) {
+      return r.json().then(function (body) { return { status: r.status, body: body }; });
+    }).catch(function () { return { status: 0, body: {} }; });
+  }
+
   function setAdmin(on) {
     adminOn = on;
     editModeBtn.classList.toggle('active', on);
     addTaskBtn.hidden = !on;
     if (card) card.renameBtn.hidden = !on;
     if (card) renderBilling();
+    if (card) renderIps();
   }
 
   function handleUnauthorized() {
-    sessionStorage.removeItem('pharus.admin');
+    localStorage.removeItem('pharus.admin');
     adminToken = null;
     setAdmin(false);
     tokenErr.textContent = t('admin.unauthorized');
@@ -772,10 +823,23 @@
     fCurrency.value = b.currency || '';
     fCycle.value = b.cycle || '';
     fBandwidth.value = b.bandwidth != null ? b.bandwidth : '';
-    fMode.value = trafficMode;
-    fDir.value = trafficDir;
+    fMode.value = b.traffic_mode || 'bi';
+    fDir.value = b.traffic_dir || 'down';
+    fDir.parentElement.hidden = fMode.value === 'bi';
     editErr.hidden = true;
     editModal.hidden = false;
+  }
+
+  function parseAdmin(res) {
+    if (res.status === 401) throw 'unauthorized';
+    return res.text().then(function (text) {
+      var body = null;
+      if (text) {
+        try { body = JSON.parse(text); } catch (e) { body = null; }
+      }
+      if (!res.ok) throw (body && body.error) || ('HTTP ' + res.status);
+      return body;
+    });
   }
 
   function saveEdit() {
@@ -786,41 +850,18 @@
       price: fPrice.value === '' ? null : parseFloat(fPrice.value),
       currency: fCurrency.value || null,
       cycle: fCycle.value || null,
-      bandwidth: fBandwidth.value === '' ? null : parseFloat(fBandwidth.value)
+      bandwidth: fBandwidth.value === '' ? null : parseFloat(fBandwidth.value),
+      traffic_mode: fMode.value,
+      traffic_dir: fDir.value
     };
-    var modeChanged = fMode.value !== trafficMode || fDir.value !== trafficDir;
-    function putSetting(key, value) {
-      return fetch('/api/admin/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
-        body: JSON.stringify({ key: key, value: value })
-      }).then(function (r) {
-        if (r.status === 401) throw 'unauthorized';
-        if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
-        return r.json();
-      });
-    }
     fetch('/api/admin/agents/' + editingId + '/billing', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
       body: JSON.stringify(body)
-    }).then(function (r) {
-      if (r.status === 401) throw 'unauthorized';
-      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
-      return r.json();
-    }).then(function (res) {
+    }).then(parseAdmin).then(function (res) {
       entry.billing = res.billing;
       entry.traffic = res.traffic;
       renderBilling();
-      if (modeChanged) {
-        trafficMode = fMode.value;
-        trafficDir = fDir.value;
-        return Promise.all([
-          putSetting('traffic_mode', trafficMode),
-          putSetting('traffic_dir', trafficDir)
-        ]);
-      }
-    }).then(function () {
       editModal.hidden = true;
     }).catch(function (e) {
       if (e === 'unauthorized') handleUnauthorized();
@@ -855,11 +896,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
       body: JSON.stringify(body)
-    }).then(function (r) {
-      if (r.status === 401) throw 'unauthorized';
-      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
-      return r.json();
-    }).then(function () {
+    }).then(parseAdmin).then(function () {
       atLabel.value = '';
       atTarget.value = '';
       atModal.hidden = true;
@@ -885,11 +922,7 @@
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
       body: JSON.stringify({ name: name })
-    }).then(function (r) {
-      if (r.status === 401) throw 'unauthorized';
-      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
-      return r.json();
-    }).then(function () {
+    }).then(parseAdmin).then(function () {
       entry.name = name;
       card.name.textContent = name;
       renameModal.hidden = true;
@@ -904,20 +937,18 @@
 
   function probeAdminLink() {
     P.requestJson('/api/meta').then(function (meta) {
-      if (meta.traffic_mode) trafficMode = meta.traffic_mode;
-      if (meta.traffic_dir) trafficDir = meta.traffic_dir;
       if (card && entry) renderBilling();
       if (!meta.admin_enabled) return;
       adminLink.hidden = false;
       editModeBtn.hidden = false;
-      var saved = sessionStorage.getItem('pharus.admin');
+      var saved = localStorage.getItem('pharus.admin');
       if (!saved) return;
       checkToken(saved).then(function (st) {
         if (st === 200) {
           adminToken = saved;
           setAdmin(true);
         } else {
-          sessionStorage.removeItem('pharus.admin');
+          localStorage.removeItem('pharus.admin');
         }
       });
     }).catch(function () {});
@@ -936,18 +967,20 @@
       setAdmin(true);
     } else {
       tokenErr.hidden = true;
+      tokenUsername.value = '';
       tokenInput.value = '';
       tokenModal.hidden = false;
-      tokenInput.focus();
+      tokenUsername.focus();
     }
   });
   document.getElementById('token-submit').addEventListener('click', function () {
-    var tok = tokenInput.value.trim();
-    if (!tok) return;
-    checkToken(tok).then(function (st) {
-      if (st === 200) {
-        adminToken = tok;
-        sessionStorage.setItem('pharus.admin', tok);
+    var u = tokenUsername.value.trim();
+    var p = tokenInput.value;
+    if (!u || !p) return;
+    doLogin(u, p).then(function (res) {
+      if (res.status === 200 && res.body && res.body.token) {
+        adminToken = res.body.token;
+        localStorage.setItem('pharus.admin', res.body.token);
         tokenModal.hidden = true;
         setAdmin(true);
       } else {
@@ -956,6 +989,11 @@
       }
     });
   });
+  function tokenKey(ev) {
+    if (ev.key === 'Enter') document.getElementById('token-submit').click();
+  }
+  tokenUsername.addEventListener('keydown', tokenKey);
+  tokenInput.addEventListener('keydown', tokenKey);
   document.getElementById('token-cancel').addEventListener('click', function () {
     tokenModal.hidden = true;
   });
@@ -963,13 +1001,17 @@
   document.getElementById('edit-cancel').addEventListener('click', function () {
     editModal.hidden = true;
   });
+  fMode.addEventListener('change', function () {
+    fDir.parentElement.hidden = fMode.value === 'bi';
+  });
   addTaskBtn.addEventListener('click', function () {
     if (!adminOn) {
       if (!adminToken) {
         tokenErr.hidden = true;
+        tokenUsername.value = '';
         tokenInput.value = '';
         tokenModal.hidden = false;
-        tokenInput.focus();
+        tokenUsername.focus();
         return;
       }
       setAdmin(true);
@@ -1011,6 +1053,7 @@
   pingChart.addEventListener('mousemove', function (ev) {
     if (!lastChart || !lastChart.points.length) {
       pingTip.hidden = true;
+      pingGuide.hidden = true;
       return;
     }
     var rect = pingChart.getBoundingClientRect();
@@ -1021,7 +1064,7 @@
       var d = Math.abs(Number(p.ts) - ts);
       if (d < minDist) { minDist = d; nearest = p; }
     });
-    if (!nearest) { pingTip.hidden = true; return; }
+    if (!nearest) { pingTip.hidden = true; pingGuide.hidden = true; return; }
     var task = null;
     for (var i = 0; i < lastChart.tasks.length; i++) {
       if (String(lastChart.tasks[i].id) === String(nearest.task_id)) { task = lastChart.tasks[i]; break; }
@@ -1037,14 +1080,23 @@
     if (tipLeft + pingTip.offsetWidth > rect.width - 8) tipLeft = x - pingTip.offsetWidth - 12;
     pingTip.style.left = Math.max(4, tipLeft) + 'px';
     pingTip.style.top = Math.max(4, ev.clientY - rect.top - 14) + 'px';
+    pingGuide.style.left = Math.round(x) + 'px';
+    pingGuide.style.top = lastChart.top + 'px';
+    pingGuide.style.height = Math.max(0, lastChart.plotBottom - lastChart.top) + 'px';
+    pingGuide.hidden = false;
   });
   pingChart.addEventListener('mouseleave', function () {
     pingTip.hidden = true;
+    pingGuide.hidden = true;
   });
 
   /* ---------- boot ---------- */
   P.ready().then(function () {
     P.initTheme();
+    P.requestJson('/api/status').then(function (agents) {
+      var a = (Array.isArray(agents) ? agents : []).find(function (x) { return x.agent_id === hostId; });
+      if (a) applyHost(applySnapshot(a));
+    }).catch(function () {});
     P.connectStream(handleMessage);
     probeAdminLink();
   });

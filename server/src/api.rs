@@ -44,7 +44,7 @@ fn now() -> i64 {
 }
 
 async fn meta(State(state): State<SharedState>) -> Response {
-    let (theme, enabled, expiry_days, traffic_mode, traffic_dir) = {
+    let (theme, enabled, expiry_days, site_name, site_url, default_language, admin_enabled) = {
         let conn = state.db.lock().unwrap();
         let theme = db::get_setting(&conn, "current_theme")
             .ok()
@@ -58,18 +58,29 @@ async fn meta(State(state): State<SharedState>) -> Response {
             .collect();
         let get = |key: &str| -> Option<String> { db::get_setting(&conn, key).ok().flatten() };
         let expiry_days = get("expiry_alert_days").and_then(|v| v.parse::<i64>().ok()).unwrap_or(3);
-        let traffic_mode = get("traffic_mode").unwrap_or_else(|| "bi".into());
-        let traffic_dir = get("traffic_dir").unwrap_or_else(|| "down".into());
-        (theme, enabled, expiry_days, traffic_mode, traffic_dir)
+        let site_name = get("site_name");
+        let site_url = get("site_url");
+        let default_language = get("default_language");
+        let admin_enabled = db::count_users(&conn).unwrap_or(0) > 0;
+        (
+            theme,
+            enabled,
+            expiry_days,
+            site_name,
+            site_url,
+            default_language,
+            admin_enabled,
+        )
     };
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "theme": theme,
         "features": enabled,
-        "admin_enabled": state.admin_token.is_some(),
+        "admin_enabled": admin_enabled,
         "expiry_alert_days": expiry_days,
-        "traffic_mode": traffic_mode,
-        "traffic_dir": traffic_dir,
+        "site_name": site_name,
+        "site_url": site_url,
+        "default_language": default_language,
     }))
     .into_response()
 }

@@ -50,9 +50,13 @@ enum Command {
         /// Themes root directory
         #[arg(long, env = "PHARUS_THEMES", default_value = "themes")]
         themes: PathBuf,
-        /// Admin token for the billing management API (disabled if unset)
-        #[arg(long, env = "PHARUS_ADMIN_TOKEN")]
-        admin_token: Option<String>,
+        /// Admin username; the account is created on first start from the
+        /// matching PHARUS_ADMIN_PASSWORD.
+        #[arg(long, env = "PHARUS_ADMIN_USER", default_value = "admin")]
+        admin_user: String,
+        /// Admin password (management API disabled if unset)
+        #[arg(long, env = "PHARUS_ADMIN_PASSWORD")]
+        admin_password: Option<String>,
     },
     /// Register an agent and print its token
     AddAgent {
@@ -131,14 +135,27 @@ async fn main() -> Result<()> {
             println!("current_theme = {name}");
             Ok(())
         }
-        Command::Serve { addr, db, themes, admin_token } => serve(addr, db, themes, admin_token).await,
+        Command::Serve { addr, db, themes, admin_user, admin_password } => {
+            serve(addr, db, themes, admin_user, admin_password).await
+        }
     }
 }
 
-async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token: Option<String>) -> Result<()> {
+async fn serve(
+    addr: String,
+    db_path: PathBuf,
+    themes_root: PathBuf,
+    admin_user: String,
+    admin_password: Option<String>,
+) -> Result<()> {
     let conn = rusqlite::Connection::open(&db_path)
         .with_context(|| format!("open db {}", db_path.display()))?;
     db::init(&conn)?;
+
+    if let Some(pw) = admin_password {
+        let hash = crate::admin::hash_password(&pw)?;
+        db::insert_user(&conn, &admin_user, &hash)?;
+    }
 
     let billing_map = db::list_billing(&conn)?;
     let traffic_map = db::load_traffic(&conn)?;
@@ -176,7 +193,7 @@ async fn serve(addr: String, db_path: PathBuf, themes_root: PathBuf, admin_token
         db: Mutex::new(conn),
         browser_tx,
         themes_root: themes_root.clone(),
-        admin_token,
+        sessions: Mutex::new(HashMap::new()),
         task_waiters: Mutex::new(HashMap::new()),
         diag_pending: Mutex::new(HashMap::new()),
     });

@@ -95,6 +95,13 @@
         <div class="card-title">
           <h2 data-f="name">—</h2>
           <p data-f="os">—</p>
+          <div class="ip-row">
+            <div class="ip-list">
+              <span class="ip-value" data-f="ips4"></span>
+              <span class="ip-value" data-f="ips6"></span>
+            </div>
+            <button class="eye-btn" data-f="ipsToggle" type="button" hidden data-i18n-aria="host.showIp" aria-label="显示 IP" title="显示 IP">👁</button>
+          </div>
         </div>
         <div class="card-badges">
           <span class="region-pill" data-f="region" hidden></span>
@@ -132,17 +139,17 @@
           </div>
           <div class="meter">
             <div class="meter-head">
-              <span class="meter-label" data-i18n="meter.disk">Disk</span>
-              <span class="meter-value" data-f="diskVal">—</span>
-            </div>
-            <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
-          </div>
-          <div class="meter">
-            <div class="meter-head">
               <span class="meter-label" data-i18n="meter.swap">Swap</span>
               <span class="meter-value" data-f="swapVal">—</span>
             </div>
             <div class="meter-track"><div class="meter-fill swap" data-f="swapFill"></div></div>
+          </div>
+          <div class="meter">
+            <div class="meter-head">
+              <span class="meter-label" data-i18n="meter.disk">Disk</span>
+              <span class="meter-value" data-f="diskVal">—</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
           </div>
         </div>
       </div>
@@ -195,10 +202,6 @@
         <div class="divider"></div>
         <div class="mini-head"><span data-i18n="streaming.current">流媒体状态</span></div>
         <div class="result-chips" data-f="unlock"></div>
-      </div>
-
-      <div class="card-actions">
-        <button class="detail-btn" type="button" data-f="detailBtn" data-i18n="host.details">查看详情</button>
       </div>
     </article>
   </template>

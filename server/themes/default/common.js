@@ -5,6 +5,16 @@
 
   var SUPPORTED = ['en', 'zh-CN', 'ja', 'ru'];
   var i18n = {};
+  var metaCache = null;
+
+  function fetchMeta() {
+    if (metaCache) return metaCache;
+    metaCache = fetch('/api/meta').then(function (r) {
+      if (!r.ok) return null;
+      return r.json();
+    }).catch(function () { return null; });
+    return metaCache;
+  }
 
   function detectLang() {
     var candidates = navigator.languages && navigator.languages.length
@@ -28,16 +38,46 @@
     });
   }
 
-  /// Load the best-matching language, apply static labels and resolve.
-  /// Every page calls this once before doing anything else.
+  /// Load the best-matching language (site default wins over browser),
+  /// apply static labels and resolve. Every page calls this once first.
   function ready() {
-    return loadLang(detectLang())
+    return fetchMeta().then(function (meta) {
+      var lang = (meta && meta.default_language) || detectLang();
+      return loadLang(lang)
+        .catch(function () { return loadLang('en'); })
+        .catch(function () { return {}; })
+        .then(function (dict) {
+          i18n = dict || {};
+          applyStatics();
+          applySiteMeta(meta);
+          return dict;
+        });
+    });
+  }
+
+  function applySiteMeta(meta) {
+    if (!meta) return;
+    if (meta.site_name) {
+      // Only the page title carries the site name; the header brand stays "Pharus".
+      var suffix = String(t('doc.title') || '').split('·').pop() || '';
+      document.title = meta.site_name + (suffix.trim() ? ' · ' + suffix.trim() : '');
+    }
+    if (meta.site_url) {
+      var links = document.querySelectorAll('.site-footer a');
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].textContent.trim() === 'Pharus') links[i].href = meta.site_url;
+      }
+    }
+  }
+
+  function reloadLanguage(lang) {
+    return loadLang(lang)
       .catch(function () { return loadLang('en'); })
       .catch(function () { return {}; })
       .then(function (dict) {
         i18n = dict || {};
         applyStatics();
-        return dict;
+        return fetchMeta().then(function (meta) { applySiteMeta(meta); return dict; });
       });
   }
 
@@ -131,6 +171,23 @@
     if (status === 'available' || status === 'ok' || status === 'unlocked' || status === 'true' || status === 'yes') return 'ok';
     if (status === 'unavailable' || status === 'blocked' || status === 'failed' || status === 'false' || status === 'no') return 'crit';
     return '';
+  }
+
+  function isLinkLocalV6(ip) {
+    return /^fe[89ab]/i.test(String(ip || ''));
+  }
+
+  function maskIp(ip) {
+    var s = String(ip || '');
+    if (s.indexOf(':') >= 0) {
+      var parts = s.split(':');
+      return parts.slice(0, 2).join(':') + ':****';
+    }
+    var v4 = s.split('.');
+    if (v4.length === 4) {
+      return v4[0] + '.' + v4[1] + '.***.***';
+    }
+    return '••••••••';
   }
 
   function requestJson(url, options) {
@@ -281,6 +338,10 @@
     serviceStatus: serviceStatus,
     statusClass: statusClass,
     requestJson: requestJson,
-    connectStream: connectStream
+    connectStream: connectStream,
+    fetchMeta: fetchMeta,
+    reloadLanguage: reloadLanguage,
+    maskIp: maskIp,
+    isLinkLocalV6: isLinkLocalV6
   };
 })();

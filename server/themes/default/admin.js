@@ -792,6 +792,8 @@
 
     function openBillingForm(agent) {
       var b = agent.billing || {};
+      var curMode = b.traffic_mode || 'bi';
+      var curDir = b.traffic_dir || 'down';
       openModal((agent.name || ('Agent #' + agent.agent_id)) + ' · ' + t('billing.manage'), function (root) {
         var f = {};
         f.resetDay = inputField('admin.resetDay', b.reset_day != null ? b.reset_day : '', { type: 'number', min: 1, max: 31 });
@@ -809,7 +811,22 @@
           { value: 'yearly', label: t('billing.cycle.yearly') }
         ], b.cycle);
         f.bandwidth = inputField('admin.bandwidth', b.bandwidth, { type: 'number', min: 0, step: '0.1' });
+        f.mode = selectField('settings.trafficMode', [
+          { value: 'bi', label: t('settings.modeBi') },
+          { value: 'uni', label: t('settings.modeUni') }
+        ], curMode);
+        f.dir = selectField('settings.trafficDir', [
+          { value: 'down', label: t('settings.dirDown') },
+          { value: 'up', label: t('settings.dirUp') },
+          { value: 'max', label: t('settings.dirMax') }
+        ], curDir);
         ['resetDay', 'quotaGb', 'expiresOn', 'price', 'currency', 'cycle', 'bandwidth'].forEach(function (k) { root.appendChild(f[k].el); });
+        root.appendChild(f.mode.el);
+        root.appendChild(f.dir.el);
+        f.dir.el.hidden = f.mode.input.value === 'bi';
+        f.mode.input.addEventListener('change', function () {
+          f.dir.el.hidden = f.mode.input.value === 'bi';
+        });
         modalSubmit = function () {
           var body = {
             reset_day: f.resetDay.input.value === '' ? null : parseInt(f.resetDay.input.value, 10),
@@ -818,13 +835,15 @@
             price: f.price.input.value === '' ? null : parseFloat(f.price.input.value),
             currency: f.currency.input.value || null,
             cycle: f.cycle.input.value || null,
-            bandwidth: f.bandwidth.input.value === '' ? null : parseFloat(f.bandwidth.input.value)
+            bandwidth: f.bandwidth.input.value === '' ? null : parseFloat(f.bandwidth.input.value),
+            traffic_mode: f.mode.input.value,
+            traffic_dir: f.dir.input.value
           };
           return options.request('/api/admin/agents/' + agent.agent_id + '/billing', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-          }).then(function () { renderHostBilling(); });
+          }).then(function () { closeModal(); renderHostBilling(); });
         };
       });
     }
@@ -833,8 +852,37 @@
       setLoading(); clearError();
       loadAgents().then(function () {
         if (!active || currentView !== 'hostBilling') return;
+        return options.request('/api/meta');
+      }).then(function (meta) {
+        if (!active || currentView !== 'hostBilling') return;
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('billing.manage'), null));
+        var daysBox = node('div', 'feature-defaults');
+        var days = inputField('settings.expiryDays', (meta && meta.expiry_alert_days) || 3, { type: 'number', min: 1, max: 365 });
+        daysBox.appendChild(days.el);
+        var daysStatus = node('span', 'inline-status');
+        var daysSave = actionButton(t('admin.save'), function () {
+          var v = parseInt(days.input.value, 10);
+          if (!Number.isFinite(v) || v < 1 || v > 365) {
+            daysStatus.textContent = t('settings.expiryRange');
+            daysStatus.className = 'inline-status error';
+            return;
+          }
+          daysSave.disabled = true;
+          daysStatus.textContent = t('common.saving');
+          options.request('/api/admin/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'expiry_alert_days', value: String(v) })
+          }).then(function () {
+            daysStatus.textContent = t('common.saved'); daysStatus.className = 'inline-status ok';
+          }).catch(function (error) {
+            daysStatus.textContent = t('common.error') + ': ' + error.message; daysStatus.className = 'inline-status error';
+          }).then(function () { daysSave.disabled = false; });
+        }, 'btn primary');
+        daysBox.appendChild(daysSave);
+        daysBox.appendChild(daysStatus);
+        options.content.appendChild(daysBox);
         var rows = adminAgents.map(function (agent) {
           var b = agent.billing || {};
           var expires = b.expires_at ? window.Pharus.fmtDate(b.expires_at) : '—';
@@ -854,37 +902,26 @@
       }).catch(showError);
     }
 
-    /* ---------- Site settings (expiry alert window, …) ---------- */
+    /* ---------- Site settings (site identity, agent secrets, language) ---------- */
     function renderSettings() {
       setLoading(); clearError();
       options.request('/api/meta').then(function (meta) {
         if (!active || currentView !== 'settings') return;
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('admin.settings'), null));
-        var box = node('div', 'feature-defaults');
-        var days = inputField('settings.expiryDays', meta.expiry_alert_days || 3, { type: 'number', min: 1, max: 365 });
-        var mode = selectField('settings.trafficMode', [
-          { value: 'bi', label: t('settings.modeBi') },
-          { value: 'uni', label: t('settings.modeUni') }
-        ], meta.traffic_mode || 'bi');
-        var dir = selectField('settings.trafficDir', [
-          { value: 'down', label: t('settings.dirDown') },
-          { value: 'up', label: t('settings.dirUp') },
-          { value: 'max', label: t('settings.dirMax') }
-        ], meta.traffic_dir || 'down');
-        box.appendChild(days.el);
-        box.appendChild(mode.el);
-        box.appendChild(dir.el);
+
+        var box = node('div', 'settings-stack');
+        var name = inputField('settings.siteName', meta.site_name || '', { type: 'text' });
+        var lang = selectField('settings.defaultLanguage', [
+          { value: 'en', label: 'English' },
+          { value: 'zh-CN', label: '中文' },
+          { value: 'ja', label: '日本語' },
+          { value: 'ru', label: 'Русский' }
+        ], meta.default_language || 'en');
+        box.appendChild(name.el);
+        box.appendChild(lang.el);
         var status = node('span', 'inline-status');
         var save = actionButton(t('admin.save'), function () {
-          var v = parseInt(days.input.value, 10);
-          if (!Number.isFinite(v) || v < 1 || v > 365) {
-            status.textContent = t('settings.expiryRange');
-            status.className = 'inline-status error';
-            return;
-          }
-          save.disabled = true;
-          status.textContent = t('common.saving');
           function put(key, value) {
             return options.request('/api/admin/settings', {
               method: 'PUT',
@@ -892,19 +929,144 @@
               body: JSON.stringify({ key: key, value: value })
             });
           }
-          Promise.all([
-            put('expiry_alert_days', String(v)),
-            put('traffic_mode', mode.input.value),
-            put('traffic_dir', dir.input.value)
-          ]).then(function () {
+          var puts = [
+            put('site_name', name.input.value.trim()),
+            put('default_language', lang.input.value)
+          ];
+          save.disabled = true;
+          status.textContent = t('common.saving');
+          Promise.all(puts).then(function () {
             status.textContent = t('common.saved'); status.className = 'inline-status ok';
+            return window.Pharus.reloadLanguage(lang.input.value).then(loadView);
           }).catch(function (error) {
             status.textContent = t('common.error') + ': ' + error.message; status.className = 'inline-status error';
           }).then(function () { save.disabled = false; });
         }, 'btn primary');
-        box.appendChild(save);
-        box.appendChild(status);
+        var actions = node('div', 'form-actions');
+        actions.appendChild(save);
+        actions.appendChild(status);
+        box.appendChild(actions);
         options.content.appendChild(box);
+
+        // agent communication keys: multiple secrets, each with note/copy/delete
+        var secretsBox = node('div', 'settings-stack');
+        var secrets = [];
+        var secretsStatus = node('span', 'inline-status');
+        var secretsList = node('div', 'secret-list');
+        secretsBox.appendChild(secretsList);
+        function maskSecret(s) {
+          return s.length > 4 ? s.slice(0, 4) + '••••••' : '••••••••';
+        }
+        function renderSecrets() {
+          secretsList.innerHTML = '';
+          if (!secrets.length) {
+            secretsList.appendChild(node('p', 'admin-empty', t('settings.noSecrets')));
+            return;
+          }
+          secrets.forEach(function (entry, idx) {
+            var item = node('div', 'secret-item');
+            item.appendChild(node('span', 'secret-mask', maskSecret(entry.secret)));
+            item.appendChild(node('span', 'secret-note', entry.note || ''));
+            var actions = node('div', 'secret-actions');
+            actions.appendChild(actionButton(t('common.copy'), function () {
+              if (navigator.clipboard) navigator.clipboard.writeText(entry.secret);
+            }, 'icon-btn'));
+            actions.appendChild(actionButton(t('admin.delete'), function () {
+              secrets.splice(idx, 1);
+              saveSecrets().then(renderSecrets);
+            }, 'icon-btn danger'));
+            item.appendChild(actions);
+            secretsList.appendChild(item);
+          });
+        }
+        function saveSecrets() {
+          secretsStatus.textContent = t('common.saving');
+          return options.request('/api/admin/agent-secrets', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(secrets)
+          }).then(function () {
+            secretsStatus.textContent = t('common.saved'); secretsStatus.className = 'inline-status ok';
+          }).catch(function (error) {
+            secretsStatus.textContent = t('common.error') + ': ' + error.message; secretsStatus.className = 'inline-status error';
+          });
+        }
+        var secretActions = node('div', 'form-actions');
+        secretActions.appendChild(actionButton(t('settings.addSecret'), function () {
+          openModal(t('settings.addSecret'), function (root) {
+            var f = {};
+            f.secret = inputField('settings.agentSecret', '', { type: 'password', autocomplete: 'new-password' });
+            f.note = inputField('settings.secretNote', '', { type: 'text' });
+            var gen = actionButton(t('settings.generate'), function () {
+              var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+              var out = '';
+              var arr = new Uint32Array(16);
+              if (window.crypto && crypto.getRandomValues) {
+                crypto.getRandomValues(arr);
+                for (var i = 0; i < 16; i++) out += chars[arr[i] % chars.length];
+              } else {
+                for (var i = 0; i < 16; i++) out += chars[Math.floor(Math.random() * chars.length)];
+              }
+              f.secret.input.value = out;
+            }, 'btn ghost');
+            var secretRow = node('div', 'form-row');
+            secretRow.appendChild(f.secret.el);
+            secretRow.appendChild(gen);
+            root.appendChild(secretRow);
+            root.appendChild(f.note.el);
+            modalSubmit = function () {
+              var s = f.secret.input.value.trim();
+              if (s.length < 6) throw new Error(t('settings.secretTooShort'));
+              if (secrets.some(function (e) { return e.secret === s; })) throw new Error(t('settings.secretDuplicate'));
+              secrets.push({ secret: s, note: f.note.input.value.trim() || null });
+              return saveSecrets().then(function () { closeModal(); renderSecrets(); });
+            };
+          });
+        }, 'btn ghost'));
+        secretActions.appendChild(secretsStatus);
+        secretsBox.appendChild(secretActions);
+        options.content.appendChild(secretsBox);
+        options.request('/api/admin/agent-secrets').then(function (list) {
+          if (!active || currentView !== 'settings') return;
+          secrets = Array.isArray(list) ? list : [];
+          renderSecrets();
+        }).catch(function () { renderSecrets(); });
+
+        // change password: current + new on the same row
+        var pwBox = node('div', 'settings-stack');
+        pwBox.appendChild(node('h3', 'settings-heading', t('admin.changePasswordHint')));
+        var pwRow = node('div', 'form-row');
+        var oldPw = inputField('admin.oldPassword', '', { type: 'password', autocomplete: 'current-password' });
+        var newPw = inputField('admin.newPassword', '', { type: 'password', autocomplete: 'new-password' });
+        pwRow.appendChild(oldPw.el);
+        pwRow.appendChild(newPw.el);
+        pwBox.appendChild(pwRow);
+        var pwStatus = node('span', 'inline-status');
+        var pwSave = actionButton(t('admin.changePassword'), function () {
+          if (!oldPw.input.value || !newPw.input.value) {
+            pwStatus.textContent = t('common.error');
+            pwStatus.className = 'inline-status error';
+            return;
+          }
+          pwSave.disabled = true;
+          pwStatus.textContent = t('common.saving');
+          options.request('/api/admin/password', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ old_password: oldPw.input.value, new_password: newPw.input.value })
+          }).then(function () {
+            pwStatus.textContent = t('common.saved'); pwStatus.className = 'inline-status ok';
+            oldPw.input.value = '';
+            newPw.input.value = '';
+          }).catch(function (error) {
+            pwStatus.textContent = t('common.error') + ': ' + error.message; pwStatus.className = 'inline-status error';
+          }).then(function () { pwSave.disabled = false; });
+        }, 'btn primary');
+        var pwActions = node('div', 'form-actions');
+        pwActions.appendChild(pwSave);
+        pwActions.appendChild(pwStatus);
+        pwBox.appendChild(pwActions);
+        options.content.appendChild(pwBox);
       }).catch(showError);
     }
 
