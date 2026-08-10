@@ -23,6 +23,7 @@
   var pingChart = document.getElementById('ping-chart');
   var pingLegend = document.getElementById('ping-legend');
   var pingLoss = document.getElementById('ping-loss');
+  var pingTip = document.getElementById('ping-tip');
   var diagTarget = document.getElementById('diag-target');
   var diagCycles = document.getElementById('diag-cycles');
   var diagPing = document.getElementById('diag-ping');
@@ -46,7 +47,16 @@
   var fPrice = document.getElementById('f-price');
   var fCurrency = document.getElementById('f-currency');
   var fCycle = document.getElementById('f-cycle');
+  var fBandwidth = document.getElementById('f-bandwidth');
+  var fMode = document.getElementById('f-mode');
+  var fDir = document.getElementById('f-dir');
   var addTaskBtn = document.getElementById('add-task-btn');
+  var renameBtn = document.getElementById('rename-btn');
+  var renameModal = document.getElementById('rename-modal');
+  var renameInput = document.getElementById('rename-input');
+  var renameErr = document.getElementById('rename-err');
+  var renameSave = document.getElementById('rename-save');
+  var renameCancel = document.getElementById('rename-cancel');
   var atModal = document.getElementById('at-modal');
   var atLabel = document.getElementById('at-label');
   var atKind = document.getElementById('at-kind');
@@ -62,6 +72,7 @@
   var CURRENCY_SYMBOL = { CNY: '¥', USD: '$', EUR: '€' };
   var CYCLE_DIVISOR = { monthly: 1, quarterly: 3, yearly: 12 };
   var CHART_COLORS = ['#fbbf24', '#38bdf8', '#a78bfa', '#34d399', '#f87171', '#fb7185'];
+  var CHART_RANGE = { '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800 };
 
   var entry = null;
   var card = null;
@@ -74,6 +85,7 @@
   var editingId = null;
   var trafficMode = 'bi';
   var trafficDir = 'down';
+  var lastChart = null;
 
   /* ---------- host card ---------- */
   function buildCard() {
@@ -378,9 +390,9 @@
         }
       });
     }
-    var minTs = Math.min.apply(null, points.map(function (point) { return Number(point.ts); }));
-    var maxTs = Math.max.apply(null, points.map(function (point) { return Number(point.ts); }));
-    if (minTs === maxTs) maxTs = minTs + 1;
+    var nowSec = Math.floor(Date.now() / 1000);
+    var minTs = nowSec - (CHART_RANGE[pingRange.value] || 86400);
+    var maxTs = nowSec;
     var rtts = points.map(function (point) { return Number(point.rtt_avg); }).filter(Number.isFinite);
     var maxRtt = rtts.length ? Math.max.apply(null, rtts) : 1;
     maxRtt = Math.max(10, Math.ceil(maxRtt / 10) * 10);
@@ -389,6 +401,7 @@
     var plotHeight = Math.max(1, plotBottom - top);
     var xAt = function (ts) { return left + (Number(ts) - minTs) / (maxTs - minTs) * plotWidth; };
     var yAt = function (rtt) { return top + (1 - Number(rtt) / maxRtt) * plotHeight; };
+    lastChart = { points: points, tasks: tasks, minTs: minTs, maxTs: maxTs, xAt: xAt, left: left, plotWidth: plotWidth };
 
     ctx.lineWidth = 1;
     ctx.font = '10px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
@@ -411,7 +424,7 @@
     ctx.textAlign = 'right';
     ctx.fillText(formatChartTime(maxTs), rect.width - right, rect.height - 5);
     ctx.textAlign = 'left';
-    ctx.fillText(t('ping.lossAxis'), left, rect.height - 30);
+    ctx.fillText(t('ping.lossAxis'), left, rect.height - 38);
 
     var summaries = [];
     tasks.forEach(function (task, taskIndex) {
@@ -437,7 +450,7 @@
         if (!loss) return;
         var x = xAt(point.ts);
         ctx.fillStyle = loss >= 0.5 ? 'rgba(248, 113, 113, 0.85)' : 'rgba(251, 191, 36, 0.75)';
-        ctx.fillRect(x - 1.5, rect.height - 20 - loss * 14, 3, Math.max(2, loss * 14));
+        ctx.fillRect(x - 1.5, rect.height - 14 - loss * 22, 3, Math.max(2, loss * 22));
       });
       var legend = document.createElement('span');
       legend.className = 'legend-item';
@@ -731,6 +744,7 @@
     adminOn = on;
     editModeBtn.classList.toggle('active', on);
     addTaskBtn.hidden = !on;
+    renameBtn.hidden = !on;
     if (card) renderBilling();
   }
 
@@ -753,6 +767,9 @@
     fPrice.value = b.price != null ? b.price : '';
     fCurrency.value = b.currency || '';
     fCycle.value = b.cycle || '';
+    fBandwidth.value = b.bandwidth != null ? b.bandwidth : '';
+    fMode.value = trafficMode;
+    fDir.value = trafficDir;
     editErr.hidden = true;
     editModal.hidden = false;
   }
@@ -764,8 +781,21 @@
       expires_on: fExpiresOn.value === '' ? null : fExpiresOn.value,
       price: fPrice.value === '' ? null : parseFloat(fPrice.value),
       currency: fCurrency.value || null,
-      cycle: fCycle.value || null
+      cycle: fCycle.value || null,
+      bandwidth: fBandwidth.value === '' ? null : parseFloat(fBandwidth.value)
     };
+    var modeChanged = fMode.value !== trafficMode || fDir.value !== trafficDir;
+    function putSetting(key, value) {
+      return fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+        body: JSON.stringify({ key: key, value: value })
+      }).then(function (r) {
+        if (r.status === 401) throw 'unauthorized';
+        if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
+        return r.json();
+      });
+    }
     fetch('/api/admin/agents/' + editingId + '/billing', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
@@ -778,6 +808,15 @@
       entry.billing = res.billing;
       entry.traffic = res.traffic;
       renderBilling();
+      if (modeChanged) {
+        trafficMode = fMode.value;
+        trafficDir = fDir.value;
+        return Promise.all([
+          putSetting('traffic_mode', trafficMode),
+          putSetting('traffic_dir', trafficDir)
+        ]);
+      }
+    }).then(function () {
       editModal.hidden = true;
     }).catch(function (e) {
       if (e === 'unauthorized') handleUnauthorized();
@@ -827,6 +866,36 @@
         atErr.hidden = false;
       }
     }).then(function () { atSubmit.disabled = false; });
+  }
+
+  function renameAgent() {
+    var name = renameInput.value.trim();
+    if (!name) {
+      renameErr.textContent = t('common.error');
+      renameErr.hidden = false;
+      return;
+    }
+    renameErr.hidden = true;
+    renameSave.disabled = true;
+    fetch('/api/admin/agents/' + hostId + '/name', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      body: JSON.stringify({ name: name })
+    }).then(function (r) {
+      if (r.status === 401) throw 'unauthorized';
+      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
+      return r.json();
+    }).then(function () {
+      entry.name = name;
+      hostName.textContent = name;
+      renameModal.hidden = true;
+    }).catch(function (e) {
+      if (e === 'unauthorized') handleUnauthorized();
+      else {
+        renameErr.textContent = t('common.error') + ': ' + e;
+        renameErr.hidden = false;
+      }
+    }).then(function () { renameSave.disabled = false; });
   }
 
   function probeAdminLink() {
@@ -909,10 +978,17 @@
   });
   atSubmit.addEventListener('click', addPingTask);
   atCancel.addEventListener('click', function () { atModal.hidden = true; });
+  renameBtn.addEventListener('click', function () {
+    renameInput.value = entry.name || ('Agent #' + hostId);
+    renameErr.hidden = true;
+    renameModal.hidden = false;
+  });
+  renameSave.addEventListener('click', renameAgent);
+  renameCancel.addEventListener('click', function () { renameModal.hidden = true; });
   atKind.addEventListener('change', function () {
     atPortField.hidden = atKind.value === 'icmp';
   });
-  [tokenModal, editModal, atModal].forEach(function (mask) {
+  [tokenModal, editModal, atModal, renameModal].forEach(function (mask) {
     mask.addEventListener('click', function (ev) {
       if (ev.target === mask || ev.target.hasAttribute('data-close')) mask.hidden = true;
     });
@@ -922,6 +998,7 @@
       tokenModal.hidden = true;
       editModal.hidden = true;
       atModal.hidden = true;
+      renameModal.hidden = true;
     }
   });
   var chartResizePending = false;
@@ -929,6 +1006,41 @@
     if (chartResizePending) return;
     chartResizePending = true;
     requestAnimationFrame(function () { chartResizePending = false; drawPingChart(); });
+  });
+
+  // hover tooltip on the latency chart
+  pingChart.addEventListener('mousemove', function (ev) {
+    if (!lastChart || !lastChart.points.length) {
+      pingTip.hidden = true;
+      return;
+    }
+    var rect = pingChart.getBoundingClientRect();
+    var x = ev.clientX - rect.left;
+    var ts = lastChart.minTs + (x - lastChart.left) / lastChart.plotWidth * (lastChart.maxTs - lastChart.minTs);
+    var nearest = null, minDist = Infinity;
+    lastChart.points.forEach(function (p) {
+      var d = Math.abs(Number(p.ts) - ts);
+      if (d < minDist) { minDist = d; nearest = p; }
+    });
+    if (!nearest) { pingTip.hidden = true; return; }
+    var task = null;
+    for (var i = 0; i < lastChart.tasks.length; i++) {
+      if (String(lastChart.tasks[i].id) === String(nearest.task_id)) { task = lastChart.tasks[i]; break; }
+    }
+    var name = task ? (task.label || ('#' + task.id)) : ('#' + nearest.task_id);
+    var rtt = Number(nearest.rtt_avg);
+    var loss = Math.max(0, Math.min(1, Number(nearest.loss) || 0));
+    pingTip.textContent = name + ' · ' + formatChartTime(Number(nearest.ts))
+      + ' · ' + (Number.isFinite(rtt) ? rtt.toFixed(1) + ' ms' : '—')
+      + ' · ' + Math.round(loss * 100) + '% ' + t('ping.lossShort');
+    pingTip.hidden = false;
+    var tipLeft = x + 12;
+    if (tipLeft + pingTip.offsetWidth > rect.width - 8) tipLeft = x - pingTip.offsetWidth - 12;
+    pingTip.style.left = Math.max(4, tipLeft) + 'px';
+    pingTip.style.top = Math.max(4, ev.clientY - rect.top - 14) + 'px';
+  });
+  pingChart.addEventListener('mouseleave', function () {
+    pingTip.hidden = true;
   });
 
   /* ---------- boot ---------- */

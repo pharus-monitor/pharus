@@ -250,5 +250,9 @@
   "settings.trafficDir": "Unidirectional value",
   "settings.dirDown": "Download",
   "settings.dirUp": "Upload",
-  "settings.dirMax": "Maximum"
+  "settings.dirMax": "Maximum",
+  "footer.rights": "· lightweight server monitoring",
+  "admin.rename": "Rename host",
+  "admin.name": "Host name",
+  "admin.editBilling": "Edit billing"
 }

@@ -12,10 +12,6 @@
   <header class="site-header">
     <div class="wrap header-inner">
       <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
-      <div class="brand host-brand">
-        <h1 id="host-name">—</h1>
-        <p id="host-os">—</p>
-      </div>
       <div class="header-right">
         <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
         <button id="edit-mode-btn" class="view-toggle" type="button" hidden data-i18n="admin.edit">编辑</button>
@@ -28,6 +24,14 @@
   </header>
 
   <main class="wrap main">
+
+    <div class="host-info">
+      <div class="host-info-titles">
+        <h1 id="host-name">—</h1>
+        <p id="host-os">—</p>
+      </div>
+      <button class="btn" id="rename-btn" type="button" hidden data-i18n="admin.rename">改名</button>
+    </div>
 
     <div id="host-card" class="host-card"></div>
 
@@ -69,6 +73,7 @@
         <p class="panel-message" id="ping-message" role="status"></p>
         <div class="chart-wrap" id="ping-chart-wrap">
           <canvas id="ping-chart" role="img" data-i18n-aria="ping.chartAria" aria-label="延迟历史折线图"></canvas>
+          <div class="chart-tip" id="ping-tip" hidden></div>
         </div>
         <div class="chart-legend" id="ping-legend"></div>
         <div class="loss-summary" id="ping-loss"></div>
@@ -114,6 +119,13 @@
 
     </div>
   </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/pharus-monitor/pharus" target="_blank" rel="noopener">Pharus</a>
+      <span data-i18n="footer.rights">· 轻量服务器监控</span>
+    </p>
+  </footer>
 
   <template id="card-tpl">
     <article class="card is-offline">
@@ -208,7 +220,9 @@
           <div class="kv"><span class="k" data-i18n="billing.price">Price</span><span class="v" data-f="price">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.resetDay">Reset day</span><span class="v" data-f="resetDay">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.bandwidth">带宽</span><span class="v" data-f="bandwidth">—</span></div>
-          <div class="kv billing-edit-kv"><button class="edit-btn" type="button" data-f="editBtn" hidden data-i18n="admin.edit">编辑</button></div>
+        </div>
+        <div class="billing-actions">
+          <button class="btn" type="button" data-f="editBtn" hidden data-i18n="admin.editBilling">编辑账单</button>
         </div>
       </div>
 
@@ -286,6 +300,27 @@
           </select>
         </label>
       </div>
+      <label class="field">
+        <span data-i18n="admin.bandwidth">带宽限制 (Mbps)</span>
+        <input type="number" id="f-bandwidth" min="0" step="0.1" />
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span data-i18n="settings.trafficMode">流量统计模式</span>
+          <select id="f-mode">
+            <option value="bi" data-i18n="settings.modeBi">双向</option>
+            <option value="uni" data-i18n="settings.modeUni">单向</option>
+          </select>
+        </label>
+        <label class="field">
+          <span data-i18n="settings.trafficDir">单向取值</span>
+          <select id="f-dir">
+            <option value="down" data-i18n="settings.dirDown">下行</option>
+            <option value="up" data-i18n="settings.dirUp">上行</option>
+            <option value="max" data-i18n="settings.dirMax">最大值</option>
+          </select>
+        </label>
+      </div>
       <p class="modal-err" id="edit-err" hidden></p>
       <div class="modal-actions">
         <button class="btn ghost" id="edit-cancel" data-i18n="admin.cancel">取消</button>
@@ -330,6 +365,24 @@
       <div class="modal-actions">
         <button class="btn ghost" id="at-cancel" data-i18n="admin.cancel">取消</button>
         <button class="btn primary" id="at-submit" data-i18n="common.add">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="rename-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 data-i18n="admin.rename">修改主机名</h3>
+        <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
+      </div>
+      <label class="field">
+        <span data-i18n="admin.name">主机名</span>
+        <input type="text" id="rename-input" autocomplete="off" />
+      </label>
+      <p class="modal-err" id="rename-err" hidden></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="rename-cancel" data-i18n="admin.cancel">取消</button>
+        <button class="btn primary" id="rename-save" data-i18n="admin.save">保存</button>
       </div>
     </div>
   </div>

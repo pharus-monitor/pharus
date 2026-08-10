@@ -673,3 +673,39 @@ body::before {
 .agent-multi-all { font-weight: 600; color: var(--text-primary); }
 #streaming-panel .panel-head { margin-bottom: 0.5rem; }
 #streaming-panel .service-results { margin-top: 0.5rem; }
+
+/* ---------- Host info header, chart tooltip, billing actions, footer ---------- */
+.host-info {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.host-info-titles h1 { margin: 0; font-size: 22px; font-weight: 650; color: var(--text-primary); line-height: 1.2; }
+.host-info-titles p { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+
+.chart-tip {
+  position: absolute;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: 11px var(--font-mono);
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.4);
+}
+
+.billing-actions { display: flex; justify-content: flex-end; margin-top: 0.9rem; }
+
+.site-footer {
+  padding: 2.5rem 1.5rem 2rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.site-footer a { color: var(--accent); text-decoration: none; }
+.site-footer a:hover { text-decoration: underline; }

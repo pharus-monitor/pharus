@@ -250,5 +250,9 @@
   "settings.trafficDir": "单向取值",
   "settings.dirDown": "下行",
   "settings.dirUp": "上行",
-  "settings.dirMax": "最大值"
+  "settings.dirMax": "最大值",
+  "footer.rights": "· 轻量服务器监控",
+  "admin.rename": "修改主机名",
+  "admin.name": "主机名",
+  "admin.editBilling": "编辑账单"
 }

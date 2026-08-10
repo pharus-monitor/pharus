@@ -250,5 +250,9 @@
   "settings.trafficDir": "Значение",
   "settings.dirDown": "Загрузка",
   "settings.dirUp": "Отдача",
-  "settings.dirMax": "Максимум"
+  "settings.dirMax": "Максимум",
+  "footer.rights": "· лёгкий мониторинг серверов",
+  "admin.rename": "Переименовать хост",
+  "admin.name": "Имя хоста",
+  "admin.editBilling": "Изменить биллинг"
 }

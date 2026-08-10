@@ -250,5 +250,9 @@
   "settings.trafficDir": "単方向の値",
   "settings.dirDown": "ダウンロード",
   "settings.dirUp": "アップロード",
-  "settings.dirMax": "最大値"
+  "settings.dirMax": "最大値",
+  "footer.rights": "· 軽量サーバー監視",
+  "admin.rename": "ホスト名を変更",
+  "admin.name": "ホスト名",
+  "admin.editBilling": "請求を編集"
 }

@@ -28,6 +28,7 @@ pub fn router(state: SharedState) -> Router<SharedState> {
         .route("/api/admin/check", post(check))
         .route("/api/admin/agents", get(list_agents))
         .route("/api/admin/agents/:id/billing", put(update_billing))
+        .route("/api/admin/agents/:id/name", put(rename_agent))
         .route("/api/admin/agents/:id/region", put(update_region))
         .route(
             "/api/admin/agents/:id/features",
@@ -154,6 +155,39 @@ async fn list_agents(State(state): State<SharedState>) -> Response {
         .collect();
     list.sort_by_key(|v| v["agent_id"].as_i64().unwrap_or(0));
     Json(list).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameBody {
+    name: String,
+}
+
+async fn rename_agent(
+    State(state): State<SharedState>,
+    Path(agent_id): Path<i64>,
+    Json(body): Json<RenameBody>,
+) -> Response {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return bad("name must not be empty");
+    }
+    let rows = {
+        let conn = state.db.lock().unwrap();
+        match db::rename_agent(&conn, agent_id, name) {
+            Ok(r) => r,
+            Err(e) => return db_err(e),
+        }
+    };
+    if rows == 0 {
+        return bad("agent not found");
+    }
+    {
+        let mut agents = state.agents.write().unwrap();
+        if let Some(a) = agents.get_mut(&agent_id) {
+            a.name = name.to_string();
+        }
+    }
+    StatusCode::OK.into_response()
 }
 
 #[derive(Debug, Deserialize)]

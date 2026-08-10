@@ -220,6 +220,10 @@ pub fn add_agent(conn: &Connection, name: &str) -> Result<(i64, String)> {
     Ok((conn.last_insert_rowid(), token))
 }
 
+pub fn rename_agent(conn: &Connection, id: i64, name: &str) -> Result<usize> {
+    Ok(conn.execute("UPDATE agents SET name = ?1 WHERE id = ?2", params![name, id])?)
+}
+
 pub fn find_by_token(conn: &Connection, token: &str) -> Result<Option<(i64, String)>> {
     let row = conn
         .query_row(
