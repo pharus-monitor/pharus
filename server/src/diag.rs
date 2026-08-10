@@ -245,9 +245,10 @@ pub fn relay_legacy_result(
     });
 }
 
-/// Relay a structured MTR result. Always terminal.
-pub fn relay_mtr(state: &SharedState, agent_id: i64, request_id: String, hops: Vec<MtrHop>) {
-    if take_pending(state, &request_id, agent_id, true).is_none() {
+/// Relay a structured MTR snapshot. Progressive updates (`done: false`) keep
+/// the request pending; the terminal frame closes it out.
+pub fn relay_mtr(state: &SharedState, agent_id: i64, request_id: String, hops: Vec<MtrHop>, done: bool) {
+    if take_pending(state, &request_id, agent_id, done).is_none() {
         return;
     }
     let result = serde_json::to_value(&hops).ok();
@@ -258,8 +259,8 @@ pub fn relay_mtr(state: &SharedState, agent_id: i64, request_id: String, hops: V
         stream: None,
         data: None,
         result,
-        done: true,
-        exit_code: Some(0),
+        done,
+        exit_code: if done { Some(0) } else { None },
     });
 }
 

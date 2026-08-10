@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u8 = 1;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
     pub hostname: String,
@@ -157,6 +161,9 @@ pub struct MtrHop {
     pub best: f64,
     pub worst: f64,
     pub stdev: f64,
+    /// RTT of the most recent probe; absent from pre-0.4.2 agents.
+    #[serde(default)]
+    pub last: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,7 +219,15 @@ pub enum AgentMsg {
         #[serde(default)]
         exit_code: Option<i32>,
     },
-    MtrResult { request_id: String, hubs: Vec<MtrHop> },
+    /// Structured MTR snapshot. New agents stream progressive updates with
+    /// `done: false` and a terminal frame with `done: true`; old agents send a
+    /// single frame without the field, which must read as terminal.
+    MtrResult {
+        request_id: String,
+        hubs: Vec<MtrHop>,
+        #[serde(default = "default_true")]
+        done: bool,
+    },
     /// Agent-side region detection reported once per connection.
     Region { code: String },
 }

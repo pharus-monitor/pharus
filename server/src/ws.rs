@@ -315,8 +315,8 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             &state, agent_id, request_id, stream, data, done, exit_code,
                         );
                     }
-                    Ok(AgentMsg::MtrResult { request_id, hubs }) => {
-                        crate::diag::relay_mtr(&state, agent_id, request_id, hubs);
+                    Ok(AgentMsg::MtrResult { request_id, hubs, done }) => {
+                        crate::diag::relay_mtr(&state, agent_id, request_id, hubs, done);
                     }
                     Ok(AgentMsg::Auth { .. }) => {
                         warn!(agent_id, "unexpected re-auth, dropping");

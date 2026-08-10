@@ -604,7 +604,8 @@ fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tok
         }
         TaskKind::Mtr => {
             let mut c = std::process::Command::new("mtr");
-            c.args(["-r", "-c", &cycles, target]);
+            // --raw streams one line per probe, enabling live table updates
+            c.args(["--raw", "-c", &cycles, target]);
             c
         }
         TaskKind::Script => {
@@ -732,41 +733,108 @@ async fn run_task(
     }
 }
 
-/// Parses `mtr -r` report rows: `1.|-- host  0.0%  4  0.5  0.6  0.5  0.7  0.1`.
-/// The numeric columns are read from the right so a long hostname cannot shift
-/// the offsets.
-fn parse_mtr_report(text: &str) -> Vec<MtrHop> {
-    let mut hops = Vec::new();
-    for line in text.lines() {
-        let Some((idx, rest)) = line.trim().split_once("|--") else {
-            continue;
-        };
-        let fields: Vec<&str> = rest.split_whitespace().collect();
-        if fields.len() < 8 {
-            continue;
+/// Per-hop state accumulated from `mtr --raw` lines.
+#[derive(Default)]
+struct RawHop {
+    host: String,
+    sent: u32,
+    rtts: Vec<f64>,
+}
+
+/// Parses one `mtr --raw` line into the hop table. Returns true when the table
+/// changed. Format: `x <hop> <seq>` (probe sent), `h <hop> <ip>`,
+/// `d <hop> <name>` (DNS, preferred for display), `p <hop> <us> <seq>` (reply).
+fn parse_mtr_raw(line: &str, hops: &mut std::collections::BTreeMap<u32, RawHop>) -> bool {
+    let mut it = line.split_whitespace();
+    let tag = it.next().unwrap_or("");
+    let Some(idx) = it.next().and_then(|s| s.parse::<u32>().ok()) else {
+        return false;
+    };
+    let hop = hops.entry(idx).or_default();
+    match tag {
+        "x" => hop.sent += 1,
+        "h" => {
+            let v = it.next().unwrap_or("");
+            if hop.host.is_empty() {
+                hop.host = v.into();
+            }
         }
-        let n = fields.len();
-        let num = |back: usize| -> f64 {
-            fields[n - back].trim_end_matches('%').parse().unwrap_or(0.0)
-        };
-        hops.push(MtrHop {
-            hop: idx.trim().trim_end_matches('.').parse().unwrap_or(0),
-            host: fields[0].to_string(),
-            loss: num(7) / 100.0,
-            sent: num(6) as u32,
-            avg: num(4),
-            best: num(3),
-            worst: num(2),
-            stdev: num(1),
-        });
+        "d" => {
+            let v = it.next().unwrap_or("");
+            if !v.is_empty() {
+                hop.host = v.into();
+            }
+        }
+        "p" => {
+            if let Some(us) = it.next().and_then(|s| s.parse::<f64>().ok()) {
+                hop.rtts.push(us / 1000.0);
+            }
+        }
+        _ => return false,
     }
+    true
+}
+
+fn raw_hops_snapshot(hops: &std::collections::BTreeMap<u32, RawHop>) -> Vec<MtrHop> {
     hops
+        .iter()
+        .map(|(idx, h)| {
+            let n = h.rtts.len() as f64;
+            let (mut best, mut worst, mut sum, mut sq) = (f64::MAX, 0.0f64, 0.0, 0.0);
+            for &r in &h.rtts {
+                best = best.min(r);
+                worst = worst.max(r);
+                sum += r;
+                sq += r * r;
+            }
+            let avg = if n > 0.0 { sum / n } else { 0.0 };
+            let stdev = if n > 0.0 { (sq / n - avg * avg).max(0.0).sqrt() } else { 0.0 };
+            MtrHop {
+                hop: idx + 1,
+                // the first hop is this machine's gateway — never disclose it
+                host: if *idx == 0 { "***".into() } else { h.host.clone() },
+                loss: if h.sent > 0 {
+                    (1.0 - n / h.sent as f64).max(0.0)
+                } else {
+                    0.0
+                },
+                sent: h.sent,
+                avg,
+                best: if n > 0.0 { best } else { 0.0 },
+                worst,
+                stdev,
+                last: h.rtts.last().copied().unwrap_or(0.0),
+            }
+        })
+        .collect()
+}
+
+/// Mask the first hop of traceroute output: ` 1  gateway (1.2.3.4)  0.4 ms …`
+/// keeps the hop number and timings but hides the gateway address.
+fn mask_traceroute_hop1(line: &str) -> String {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("1 ") {
+        return line.to_string();
+    }
+    let mut out = String::from(" 1 ");
+    for tok in trimmed.split_whitespace().skip(1) {
+        let visible = tok == "*" || tok == "ms" || tok.parse::<f64>().is_ok();
+        out.push_str(if visible { tok } else { "***" });
+        out.push(' ');
+    }
+    out.trim_end().to_string()
 }
 
 /// Per-stream output cap for a streamed diagnostic.
 const STREAM_CAP: usize = 128 * 1024;
 
-fn spawn_pump<R>(reader: R, msg_tx: MsgTx, request_id: String, stream: &'static str) -> tokio::task::JoinHandle<()>
+fn spawn_pump<R>(
+    reader: R,
+    msg_tx: MsgTx,
+    request_id: String,
+    stream: &'static str,
+    mask_first_hop: bool,
+) -> tokio::task::JoinHandle<()>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -778,6 +846,11 @@ where
                 continue;
             }
             used += line.len() + 1;
+            let line = if mask_first_hop {
+                mask_traceroute_hop1(&line)
+            } else {
+                line
+            };
             let sent = msg_tx.send(AgentMsg::CmdOutput {
                 request_id: request_id.clone(),
                 stream: stream.into(),
@@ -811,17 +884,7 @@ async fn stream_task(
     };
 
     if kind == TaskKind::Mtr {
-        let (code, text) = run_task(kind, &target, cycles, 180).await;
-        let hops = parse_mtr_report(&text);
-        let msg = match hops.is_empty() {
-            // surface the raw failure instead of an empty table
-            true => finish(text, code),
-            false => AgentMsg::MtrResult {
-                request_id: request_id.clone(),
-                hubs: hops,
-            },
-        };
-        let _ = msg_tx.send(msg);
+        stream_mtr(msg_tx, request_id, &target, cycles).await;
         return;
     }
 
@@ -838,9 +901,10 @@ async fn stream_task(
         }
     };
 
+    let mask = kind == TaskKind::Traceroute;
     let pumps = [
-        child.stdout.take().map(|r| spawn_pump(r, msg_tx.clone(), request_id.clone(), "stdout")),
-        child.stderr.take().map(|r| spawn_pump(r, msg_tx.clone(), request_id.clone(), "stderr")),
+        child.stdout.take().map(|r| spawn_pump(r, msg_tx.clone(), request_id.clone(), "stdout", mask)),
+        child.stderr.take().map(|r| spawn_pump(r, msg_tx.clone(), request_id.clone(), "stderr", mask)),
     ];
 
     let exit_code = match tokio::time::timeout(Duration::from_secs(120), child.wait()).await {
@@ -856,6 +920,87 @@ async fn stream_task(
         let _ = p.await;
     }
     let _ = msg_tx.send(finish(String::new(), exit_code));
+}
+
+/// Streams a live MTR table: parses `mtr --raw` lines as they arrive and sends
+/// progressive snapshots (done=false, throttled) plus one terminal snapshot.
+async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Option<u32>) {
+    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
+        request_id: request_id.clone(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    };
+    let Some(mut cmd) = task_command(TaskKind::Mtr, target, cycles) else {
+        let _ = msg_tx.send(finish("mtr is not supported on Windows agents".into(), -1));
+        return;
+    };
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = msg_tx.send(finish(format!("failed to run: {e}\n"), -1));
+            return;
+        }
+    };
+    let stderr_buf = Arc::new(Mutex::new(String::new()));
+    if let Some(err) = child.stderr.take() {
+        let shared = stderr_buf.clone();
+        tokio::spawn(async move {
+            let mut r = BufReader::new(err);
+            let mut tmp = String::new();
+            let _ = tokio::io::AsyncReadExt::read_to_string(&mut r, &mut tmp).await;
+            // keep the tail small; surfaced only when no hops parsed
+            let start = tmp.len().saturating_sub(4096);
+            shared.lock().unwrap().push_str(&tmp[start..]);
+        });
+    }
+    let mut hops = std::collections::BTreeMap::new();
+    let mut dirty = false;
+    let mut last_push = Instant::now() - Duration::from_secs(1);
+    let max_secs = cycles.unwrap_or(10).clamp(1, 30) as u64 * 3 + 60;
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut timed_out = false;
+    loop {
+        let next = tokio::time::timeout(Duration::from_secs(max_secs), lines.next_line()).await;
+        match next {
+            Ok(Ok(Some(line))) => {
+                dirty |= parse_mtr_raw(&line, &mut hops);
+                if dirty && last_push.elapsed() >= Duration::from_millis(300) {
+                    let _ = msg_tx.send(AgentMsg::MtrResult {
+                        request_id: request_id.clone(),
+                        hubs: raw_hops_snapshot(&hops),
+                        done: false,
+                    });
+                    dirty = false;
+                    last_push = Instant::now();
+                }
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(_)) => break,
+            Err(_) => {
+                timed_out = true;
+                let _ = child.kill().await;
+                break;
+            }
+        }
+    }
+    let exit_code = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(s)) => s.code().unwrap_or(-1),
+        _ => -1,
+    };
+    if hops.is_empty() {
+        let stderr = stderr_buf.lock().unwrap().clone();
+        let detail = if timed_out { "mtr timed out\n".to_string() } else { stderr };
+        let _ = msg_tx.send(finish(detail, exit_code));
+        return;
+    }
+    let _ = msg_tx.send(AgentMsg::MtrResult {
+        request_id,
+        hubs: raw_hops_snapshot(&hops),
+        done: true,
+    });
 }
 
 /// Best-effort country lookup, reported once per connection.

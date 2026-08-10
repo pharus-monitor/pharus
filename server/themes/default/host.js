@@ -593,11 +593,44 @@
     if (!request) return;
     if (message.data != null) appendDiagnosticPart(request, message.data, message.stream === 'stderr' ? 'stderr' : '');
     if (message.result != null) {
-      appendDiagnosticPart(request, JSON.stringify(message.result, null, 2) + '\n', 'structured');
+      if (message.kind === 'mtr' && Array.isArray(message.result)) {
+        renderMtrTable(request, message.result);
+      } else {
+        appendDiagnosticPart(request, JSON.stringify(message.result, null, 2) + '\n', 'structured');
+      }
     }
     if (message.done) {
       setDiagnosticState(request, message.exit_code == null || message.exit_code === 0 ? 'finished' : 'failed', message.exit_code);
     }
+  }
+
+  function mtrPad(value, width) {
+    var s = String(value);
+    while (s.length < width) s += ' ';
+    return s;
+  }
+
+  function mtrNum(value) {
+    var n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(1) : '0.0';
+  }
+
+  /* Renders hops like the live `mtr` curses table, rebuilt on each snapshot. */
+  function renderMtrTable(request, hops) {
+    var rows = [mtrPad('Host', 27) + 'Loss%   Snt   Last    Avg   Best   Wrst  StDev'];
+    hops.forEach(function (h) {
+      rows.push(
+        mtrPad(h.hop + '.|-- ' + (h.host || '???'), 27)
+        + mtrPad(((Number(h.loss) || 0) * 100).toFixed(1) + '%', 7)
+        + mtrPad(h.sent || 0, 6)
+        + mtrPad(mtrNum(h.last), 7)
+        + mtrPad(mtrNum(h.avg), 7)
+        + mtrPad(mtrNum(h.best), 7)
+        + mtrPad(mtrNum(h.worst), 7)
+        + mtrNum(h.stdev)
+      );
+    });
+    request.output.textContent = rows.join('\n') + '\n';
   }
 
   function runDiagnostic(kind) {
