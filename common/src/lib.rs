@@ -15,7 +15,8 @@ pub struct SystemInfo {
     /// agent could not read it (no dmidecode / WMI access).
     #[serde(default)]
     pub mem_desc: Option<String>,
-    /// Non-loopback IPv4/IPv6 addresses reported by the agent.
+    /// Public IPv4/IPv6 addresses reported by the agent (loopback and
+    /// private/link-local IPv4 excluded).
     #[serde(default)]
     pub ips: Vec<String>,
 }

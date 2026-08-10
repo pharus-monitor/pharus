@@ -13,7 +13,8 @@ path = "src/main.rs"
 pharus-common = { path = "../common" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 futures-util = "0.3"
 sysinfo = "0.33"
 serde = { version = "1", features = ["derive"] }

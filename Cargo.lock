@@ -1233,6 +1233,7 @@ dependencies = [
  "futures-util",
  "pharus-common",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sysinfo",

@@ -102,6 +102,20 @@ fn collect_ips() -> Vec<String> {
             if addr.is_loopback() || addr.is_unspecified() {
                 continue;
             }
+            if let std::net::IpAddr::V4(v4) = addr {
+                let o = v4.octets();
+                let is_cgnat = o[0] == 100 && (64..=127).contains(&o[1]);
+                if v4.is_private() || v4.is_link_local() || v4.is_broadcast() || is_cgnat {
+                    continue;
+                }
+            } else if let std::net::IpAddr::V6(v6) = addr {
+                let o = v6.octets();
+                let is_link_local = o[0] == 0xfe && (o[1] & 0xc0) == 0x80;
+                let is_unique_local = (o[0] & 0xfe) == 0xfc;
+                if is_link_local || is_unique_local {
+                    continue;
+                }
+            }
             let s = addr.to_string();
             if !out.contains(&s) {
                 out.push(s);
@@ -1055,6 +1069,12 @@ async fn metrics_loop(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // rustls 0.23 builds without a process-level default provider when feature
+    // unification disables defaults; install ring explicitly or wss:// panics.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
