@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="doc.title.admin">Pharus · Admin</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
+      <div class="brand host-brand">
+        <h1 data-i18n="admin.title">管理中心</h1>
+        <p data-i18n="admin.subtitle">配置告警、通知、任务、区域和功能开关</p>
+      </div>
+      <div class="header-right">
+        <span id="conn" class="conn-badge conn-down" role="status">
+          <span class="conn-dot"></span>Connecting…
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap main">
+
+    <!-- login -->
+    <section class="admin-login" id="login-view" hidden>
+      <div class="admin-login-card">
+        <h2 data-i18n="admin.login">管理员登录</h2>
+        <p class="admin-login-hint" data-i18n="admin.loginHint">输入管理 Token 进入管理中心</p>
+        <label class="field">
+          <span data-i18n="admin.token">管理 Token</span>
+          <input type="password" id="login-token" autocomplete="off" />
+        </label>
+        <p class="modal-err" id="login-err" hidden></p>
+        <div class="modal-actions">
+          <a class="btn ghost" href="index.html" data-i18n="admin.cancel">取消</a>
+          <button class="btn primary" id="login-submit" data-i18n="admin.submit">确定</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- admin workspace -->
+    <section class="admin-panel" id="admin-root" hidden>
+      <div class="admin-tabs" role="navigation" aria-label="管理页面">
+        <button class="admin-tab active" type="button" data-admin-view="alerts" data-i18n="admin.alerts">告警规则</button>
+        <button class="admin-tab" type="button" data-admin-view="channels" data-i18n="admin.channels">通知渠道</button>
+        <button class="admin-tab" type="button" data-admin-view="pingTasks" data-i18n="admin.pingTasks">Ping 任务</button>
+        <button class="admin-tab" type="button" data-admin-view="tasks" data-i18n="admin.tasks">自定义任务</button>
+        <button class="admin-tab" type="button" data-admin-view="regions" data-i18n="admin.regions">区域设置</button>
+        <button class="admin-tab" type="button" data-admin-view="features" data-i18n="admin.features">功能开关</button>
+      </div>
+      <p class="panel-message error" id="admin-error" role="alert" hidden></p>
+      <div id="admin-content"></div>
+    </section>
+
+    <section class="admin-login" id="disabled-view" hidden>
+      <div class="admin-login-card">
+        <h2 data-i18n="admin.disabled">管理未启用</h2>
+        <p data-i18n="admin.disabledHint">服务器未设置 PHARUS_ADMIN_TOKEN，管理接口不可用。</p>
+        <div class="modal-actions"><a class="btn ghost" href="index.html" data-i18n="admin.cancel">返回</a></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-mask" id="entity-modal" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h3 id="entity-title">—</h3>
+        <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
+      </div>
+      <form id="entity-form">
+        <div id="entity-fields"></div>
+        <p class="modal-err" id="entity-err" hidden></p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="entity-cancel" type="button" data-i18n="admin.cancel">取消</button>
+          <button class="btn primary" id="entity-save" type="submit" data-i18n="admin.save">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="admin.js"></script>
+  <script>
+    (function () {
+      'use strict';
+      var P = window.Pharus;
+      var loginView = document.getElementById('login-view');
+      var disabledView = document.getElementById('disabled-view');
+      var adminRoot = document.getElementById('admin-root');
+      var loginToken = document.getElementById('login-token');
+      var loginErr = document.getElementById('login-err');
+      var loginSubmit = document.getElementById('login-submit');
+      var adminController = null;
+      var adminToken = null;
+      var agentsMap = new Map();
+
+      function adminRequest(url, options) {
+        options = options || {};
+        var headers = {};
+        Object.keys(options.headers || {}).forEach(function (key) { headers[key] = options.headers[key]; });
+        headers.Authorization = 'Bearer ' + adminToken;
+        return fetch(url, {
+          method: options.method || 'GET',
+          headers: headers,
+          body: options.body
+        }).then(function (response) {
+          return response.text().then(function (text) {
+            var body = null;
+            if (text) {
+              try { body = JSON.parse(text); } catch (e) { body = null; }
+            }
+            if (response.status === 401) {
+              logout();
+              throw new Error(P.t('admin.unauthorized'));
+            }
+            if (!response.ok) throw new Error((body && body.error) || ('HTTP ' + response.status));
+            return body || {};
+          });
+        });
+      }
+
+      function checkToken(tok) {
+        return fetch('/api/admin/check', {
+          method: 'POST',
+          headers: tok ? { Authorization: 'Bearer ' + tok } : {}
+        }).then(function (r) { return r.status; }).catch(function () { return 0; });
+      }
+
+      function enterAdmin(tok) {
+        adminToken = tok;
+        sessionStorage.setItem('pharus.admin', tok);
+        loginView.hidden = true;
+        adminRoot.hidden = false;
+        if (!adminController) {
+          adminController = window.PharusAdmin.create({
+            root: adminRoot,
+            content: document.getElementById('admin-content'),
+            error: document.getElementById('admin-error'),
+            modal: document.getElementById('entity-modal'),
+            form: document.getElementById('entity-form'),
+            fields: document.getElementById('entity-fields'),
+            title: document.getElementById('entity-title'),
+            formError: document.getElementById('entity-err'),
+            t: P.t,
+            request: adminRequest,
+            getAgents: function () { return Array.from(agentsMap.entries()); },
+            hasFeature: P.hasFeature
+          });
+        }
+        adminController.setVisible(true);
+      }
+
+      function logout() {
+        adminToken = null;
+        sessionStorage.removeItem('pharus.admin');
+        if (adminController) { adminController.setVisible(false); }
+        adminRoot.hidden = true;
+        loginToken.value = '';
+        loginErr.hidden = true;
+        loginView.hidden = false;
+      }
+
+      function boot() {
+        // keep a live agent list so feature/region choices can reflect current state
+        P.connectStream(function (msg) {
+          if (msg.type === 'snapshot') {
+            msg.agents.forEach(function (a) {
+              agentsMap.set(a.agent_id, {
+                name: a.name,
+                features: Array.isArray(a.features) ? a.features.slice() : null,
+                region: a.region || null
+              });
+            });
+          } else if (msg.type === 'features_update') {
+            var f = agentsMap.get(msg.agent_id) || {};
+            f.features = Array.isArray(msg.features) ? msg.features.slice() : [];
+            agentsMap.set(msg.agent_id, f);
+          } else if (msg.type === 'region_update') {
+            var g = agentsMap.get(msg.agent_id) || {};
+            g.region = msg.region || null;
+            agentsMap.set(msg.agent_id, g);
+          }
+        });
+
+        checkToken(null).then(function (status) {
+          if (status === 404 || status === 0) {
+            loginView.hidden = true;
+            disabledView.hidden = false;
+            return;
+          }
+          var saved = sessionStorage.getItem('pharus.admin');
+          if (!saved) {
+            loginView.hidden = false;
+            loginToken.focus();
+            return;
+          }
+          checkToken(saved).then(function (st) {
+            if (st === 200) enterAdmin(saved);
+            else sessionStorage.removeItem('pharus.admin'), loginView.hidden = false;
+          });
+        });
+      }
+
+      loginSubmit.addEventListener('click', function () {
+        var tok = loginToken.value.trim();
+        if (!tok) return;
+        loginSubmit.disabled = true;
+        checkToken(tok).then(function (st) {
+          loginSubmit.disabled = false;
+          if (st === 200) {
+            enterAdmin(tok);
+          } else {
+            loginErr.textContent = P.t('admin.unauthorized');
+            loginErr.hidden = false;
+          }
+        });
+      });
+      loginToken.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') loginSubmit.click();
+      });
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') {
+          document.getElementById('entity-modal').hidden = true;
+        }
+      });
+
+      P.ready().then(boot);
+    })();
+  </script>
+</body>
+</html>

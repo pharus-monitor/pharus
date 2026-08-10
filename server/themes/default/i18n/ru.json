@@ -206,5 +206,16 @@
   "admin.price": "Цена",
   "admin.currency": "Валюта",
   "admin.cycle": "Платёжный цикл",
-  "admin.resetDay": "День сброса (1-31, пусто = без сброса)"
+  "admin.resetDay": "День сброса (1-31, пусто = без сброса)",
+  "doc.title.host": "Pharus · Сервер",
+  "doc.title.admin": "Pharus · Управление",
+  "nav.hosts": "← Серверы",
+  "nav.admin": "Управление",
+  "admin.title": "Центр управления",
+  "admin.subtitle": "Алерты, уведомления, задачи, регионы и функции",
+  "admin.loginHint": "Введите токен администратора",
+  "admin.disabled": "Управление отключено",
+  "admin.disabledHint": "На сервере не задан PHARUS_ADMIN_TOKEN; API управления недоступен.",
+  "host.details": "Подробнее",
+  "region.flat": "Список"
 }

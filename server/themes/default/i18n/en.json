@@ -206,5 +206,16 @@
   "admin.price": "Price",
   "admin.currency": "Currency",
   "admin.cycle": "Billing cycle",
-  "admin.resetDay": "Monthly reset day (1-31, empty = no reset)"
+  "admin.resetDay": "Monthly reset day (1-31, empty = no reset)",
+  "doc.title.host": "Pharus · Host",
+  "doc.title.admin": "Pharus · Admin",
+  "nav.hosts": "← Hosts",
+  "nav.admin": "Admin",
+  "admin.title": "Admin Center",
+  "admin.subtitle": "Alerts, notifications, tasks, regions and feature toggles",
+  "admin.loginHint": "Enter the admin token to continue",
+  "admin.disabled": "Admin disabled",
+  "admin.disabledHint": "The server has no PHARUS_ADMIN_TOKEN set; the admin API is unavailable.",
+  "host.details": "Details",
+  "region.flat": "Flat"
 }

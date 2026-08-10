@@ -206,5 +206,16 @@
   "admin.price": "价格",
   "admin.currency": "币种",
   "admin.cycle": "付费周期",
-  "admin.resetDay": "每月重置日（1-31，留空不重置）"
+  "admin.resetDay": "每月重置日（1-31，留空不重置）",
+  "doc.title.host": "Pharus · 主机详情",
+  "doc.title.admin": "Pharus · 管理后台",
+  "nav.hosts": "← 主机列表",
+  "nav.admin": "管理",
+  "admin.title": "管理中心",
+  "admin.subtitle": "配置告警、通知、任务、区域和功能开关",
+  "admin.loginHint": "输入管理 Token 进入管理中心",
+  "admin.disabled": "管理未启用",
+  "admin.disabledHint": "服务器未设置 PHARUS_ADMIN_TOKEN，管理接口不可用。",
+  "host.details": "查看详情",
+  "region.flat": "平铺"
 }

@@ -206,5 +206,16 @@
   "admin.price": "価格",
   "admin.currency": "通貨",
   "admin.cycle": "支払い周期",
-  "admin.resetDay": "毎月のリセット日（1-31、空欄でリセットなし）"
+  "admin.resetDay": "毎月のリセット日（1-31、空欄でリセットなし）",
+  "doc.title.host": "Pharus · ホスト詳細",
+  "doc.title.admin": "Pharus · 管理コンソール",
+  "nav.hosts": "← ホスト一覧",
+  "nav.admin": "管理",
+  "admin.title": "管理センター",
+  "admin.subtitle": "アラート・通知・タスク・地域・機能スイッチを設定",
+  "admin.loginHint": "管理者トークンを入力してください",
+  "admin.disabled": "管理が無効です",
+  "admin.disabledHint": "PHARUS_ADMIN_TOKEN が未設定のため管理 API は利用できません。",
+  "host.details": "詳細",
+  "region.flat": "フラット"
 }

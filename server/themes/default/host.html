@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title data-i18n="doc.title">Pharus · Server Monitoring</title>
+  <title data-i18n="doc.title.host">Pharus · Host</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
@@ -11,31 +11,12 @@
 
   <header class="site-header">
     <div class="wrap header-inner">
-      <div class="beacon" aria-hidden="true">
-        <svg viewBox="0 0 48 48" class="beacon-svg">
-          <defs>
-            <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0" stop-color="#fbbf24" stop-opacity="0.55"/>
-              <stop offset="1" stop-color="#fbbf24" stop-opacity="0"/>
-            </linearGradient>
-          </defs>
-          <g class="beacon-sweep">
-            <path d="M24 9 L46 4 L46 14 Z" fill="url(#beam)"/>
-          </g>
-          <path d="M24 3 L20.5 12 h7 Z" fill="#fbbf24"/>
-          <path d="M19.5 13 h9 L31 44 H17 Z" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linejoin="round"/>
-          <path d="M19 22 h10 M18 32 h12" stroke="#fbbf24" stroke-width="1.4" opacity="0.45"/>
-          <circle cx="24" cy="17.5" r="2.2" fill="#fde68a"/>
-        </svg>
-      </div>
-      <div class="brand">
-        <h1>Pharus</h1>
-        <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
+      <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
+      <div class="brand host-brand">
+        <h1 id="host-name">—</h1>
+        <p id="host-os">—</p>
       </div>
       <div class="header-right">
-        <button id="group-toggle" class="view-toggle" type="button" aria-pressed="false" data-i18n-aria="region.toggle" aria-label="Toggle region grouping">
-          <span data-i18n="region.flat">Flat</span>
-        </button>
         <a id="admin-link" class="admin-link" href="admin.html" hidden data-i18n="nav.admin">管理</a>
         <span id="conn" class="conn-badge conn-down" role="status">
           <span class="conn-dot"></span>Connecting…
@@ -46,38 +27,78 @@
 
   <main class="wrap main">
 
-    <section class="stats" aria-label="总览">
-      <div class="stat-tile">
-        <p class="stat-label" data-i18n="stats.total">Servers</p>
-        <p class="stat-value" id="stat-total">0</p>
-      </div>
-      <div class="stat-tile">
-        <p class="stat-label" data-i18n="stats.online">Online</p>
-        <p class="stat-value stat-online" id="stat-online">0</p>
-      </div>
-      <div class="stat-tile">
-        <p class="stat-label" data-i18n="stats.offline">Offline</p>
-        <p class="stat-value stat-offline" id="stat-offline">0</p>
-      </div>
-      <div class="stat-tile">
-        <p class="stat-label" data-i18n="stats.avgCpu">Avg CPU</p>
-        <p class="stat-value stat-cpu" id="stat-cpu">—</p>
-      </div>
-      <div class="stat-tile">
-        <p class="stat-label" data-i18n="stats.monthlyCost">Monthly cost</p>
-        <p class="stat-value stat-cost" id="stat-cost">—</p>
-      </div>
-    </section>
+    <div id="host-card" class="host-card"></div>
 
-    <section id="grid" class="grid" aria-live="polite"></section>
+    <div class="feature-grid" id="feature-grid">
 
-    <div id="empty" class="empty" hidden>
-      <p class="empty-title" data-i18n="empty.title">No servers yet</p>
-      <p class="empty-hint">
-        <span data-i18n="empty.hintBefore">Run</span>
-        <code>pharus add-agent --name &lt;name&gt;</code>
-        <span data-i18n="empty.hintAfter">to register your first server</span>
-      </p>
+      <section class="feature-panel" id="ping-panel">
+        <div class="panel-head">
+          <div>
+            <h2 data-i18n="ping.title">延迟历史</h2>
+            <p data-i18n="ping.subtitle">平均往返延迟与丢包趋势</p>
+          </div>
+        </div>
+        <div class="panel-controls">
+          <label class="field compact">
+            <span data-i18n="ping.task">探测任务</span>
+            <select id="ping-task"><option value="" data-i18n="ping.allTasks">全部任务</option></select>
+          </label>
+          <label class="field compact">
+            <span data-i18n="common.range">时间范围</span>
+            <select id="ping-range">
+              <option value="1h" data-i18n="range.1h">1 小时</option>
+              <option value="6h" data-i18n="range.6h">6 小时</option>
+              <option value="24h" selected data-i18n="range.24h">24 小时</option>
+              <option value="7d" data-i18n="range.7d">7 天</option>
+            </select>
+          </label>
+        </div>
+        <p class="panel-message" id="ping-message" role="status"></p>
+        <div class="chart-wrap" id="ping-chart-wrap">
+          <canvas id="ping-chart" role="img" data-i18n-aria="ping.chartAria" aria-label="延迟历史折线图"></canvas>
+        </div>
+        <div class="chart-legend" id="ping-legend"></div>
+        <div class="loss-summary" id="ping-loss"></div>
+      </section>
+
+      <section class="feature-panel" id="diag-panel">
+        <div class="panel-head">
+          <div>
+            <h2 data-i18n="diag.title">网络诊断</h2>
+            <p data-i18n="diag.subtitle">Looking Glass 与 MTR 流式输出</p>
+          </div>
+        </div>
+        <div class="panel-controls diag-controls">
+          <label class="field compact target-field">
+            <span data-i18n="diag.target">目标地址</span>
+            <input id="diag-target" type="text" inputmode="url" placeholder="example.com / 1.1.1.1" data-i18n-placeholder="diag.targetPlaceholder" />
+          </label>
+          <label class="field compact cycles-field">
+            <span data-i18n="diag.cycles">MTR 次数</span>
+            <input id="diag-cycles" type="number" min="1" max="100" value="10" />
+          </label>
+        </div>
+        <div class="panel-actions diag-actions">
+          <button class="btn" id="diag-ping" type="button" data-i18n="diag.ping">Ping</button>
+          <button class="btn" id="diag-traceroute" type="button" data-i18n="diag.traceroute">路由追踪</button>
+          <button class="btn" id="diag-mtr" type="button" data-i18n="diag.mtr">MTR</button>
+        </div>
+        <p class="panel-message error" id="diag-error" role="alert" hidden></p>
+        <div class="diag-sessions" id="diag-sessions"></div>
+        <p class="panel-message" id="diag-empty" data-i18n="diag.empty">尚未运行诊断</p>
+      </section>
+
+      <section class="feature-panel feature-wide" id="streaming-panel">
+        <div class="panel-head panel-head-inline">
+          <div>
+            <h2 data-i18n="streaming.title">流媒体检测</h2>
+            <p data-i18n="streaming.subtitle">查看服务可用性与解锁状态</p>
+          </div>
+        </div>
+        <p class="panel-message" id="streaming-message" role="status"></p>
+        <div class="service-results" id="streaming-results"></div>
+      </section>
+
     </div>
   </main>
 
@@ -180,14 +201,10 @@
         <div class="mini-head"><span data-i18n="streaming.current">流媒体状态</span></div>
         <div class="result-chips" data-f="unlock"></div>
       </div>
-
-      <div class="card-actions">
-        <button class="detail-btn" type="button" data-f="detailBtn" data-i18n="host.details">查看详情</button>
-      </div>
     </article>
   </template>
 
   <script src="common.js"></script>
-  <script src="index.js"></script>
+  <script src="host.js"></script>
 </body>
 </html>
