@@ -663,3 +663,10 @@ body::before {
 :root[data-theme="light"] .region-head { background: rgba(255, 255, 255, 0.65); }
 :root[data-theme="light"] .region-code { color: #d97706; }
 :root[data-theme="light"] .service-result { background: rgba(15, 23, 42, 0.05); }
+
+/* ---------- Host add-task + multi-agent pickers ---------- */
+.addtask-controls { grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: end; }
+@media (max-width: 960px) { .addtask-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.agent-multi { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; padding: 2px 0; }
+.agent-multi .field-check { margin-bottom: 0.35rem; }
+.agent-multi-all { font-weight: 600; color: var(--text-primary); }

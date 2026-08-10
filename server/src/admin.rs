@@ -276,8 +276,9 @@ async fn set_agent_features(
 
 #[derive(Debug, Deserialize)]
 struct PingTaskBody {
+    /// Empty = applies to every host.
     #[serde(default)]
-    agent_id: Option<i64>,
+    agent_ids: Vec<i64>,
     label: String,
     kind: String,
     target: String,
@@ -332,7 +333,8 @@ impl PingTaskBody {
         }
         Ok(db::PingTaskRow {
             id: 0,
-            agent_id: self.agent_id,
+            agent_id: None,
+            agent_ids: self.agent_ids,
             label: self.label,
             kind: self.kind,
             target,
@@ -417,8 +419,9 @@ async fn delete_ping_task(State(state): State<SharedState>, Path(id): Path<i64>)
 struct TaskBody {
     name: String,
     command: String,
+    /// Empty = applies to every host.
     #[serde(default)]
-    agent_id: Option<i64>,
+    agent_ids: Vec<i64>,
     /// 0 = manual trigger only.
     interval_sec: u64,
     timeout_sec: u64,
@@ -444,7 +447,8 @@ impl TaskBody {
             id: 0,
             name: self.name,
             command: self.command,
-            agent_id: self.agent_id,
+            agent_id: None,
+            agent_ids: self.agent_ids,
             interval_sec: self.interval_sec,
             timeout_sec: self.timeout_sec,
             enabled: self.enabled,

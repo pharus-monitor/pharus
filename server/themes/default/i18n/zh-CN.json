@@ -237,5 +237,8 @@
   "settings.expiryDays": "到期预警天数",
   "settings.expiryRange": "请输入 1-365 之间的数字",
   "billing.manage": "账单",
-  "billing.quota": "配额"
+  "billing.quota": "配额",
+  "common.add": "添加",
+  "host.addPingTask": "添加延迟监控任务",
+  "host.addPingTaskSub": "仅应用到当前主机"
 }

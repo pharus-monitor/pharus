@@ -237,5 +237,8 @@
   "settings.expiryDays": "Окно предупреждения (дней)",
   "settings.expiryRange": "Введите число от 1 до 365",
   "billing.manage": "Биллинг",
-  "billing.quota": "Лимит"
+  "billing.quota": "Лимит",
+  "common.add": "Добавить",
+  "host.addPingTask": "Добавить задачу задержки",
+  "host.addPingTaskSub": "Только для этого хоста"
 }

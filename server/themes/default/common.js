@@ -210,7 +210,7 @@
     menu.setAttribute('role', 'menu');
     menu.hidden = true;
     var items = {};
-    ['dark', 'light', 'auto'].forEach(function (m) {
+    ['light', 'dark', 'auto'].forEach(function (m) {
       var item = document.createElement('button');
       item.type = 'button';
       item.className = 'theme-menu-item';

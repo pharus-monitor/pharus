@@ -156,7 +156,22 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+
+fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(existing.iter().any(|c| c == col))
+}
+
+fn add_column(conn: &Connection, table: &str, col: &str, ty: &str) -> Result<()> {
+    if !has_column(conn, table, col)? {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {ty}"), [])?;
+    }
+    Ok(())
+}
 
 /// Idempotent schema migration for databases created by earlier releases.
 fn migrate(conn: &Connection) -> Result<()> {
@@ -165,26 +180,23 @@ fn migrate(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     if version < 2 {
-        let existing: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(agents)")?;
-            let mapped = stmt.query_map([], |r| r.get::<_, String>(1))?;
-            mapped.collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        let columns = [
+        for (name, ty) in [
             ("reset_day", "INTEGER"),
             ("quota_bytes", "INTEGER"),
             ("expires_at", "INTEGER"),
             ("price", "REAL"),
             ("currency", "TEXT"),
             ("billing_cycle", "TEXT"),
-        ];
-        for (name, ty) in columns {
-            if !existing.iter().any(|c| c == name) {
-                conn.execute(&format!("ALTER TABLE agents ADD COLUMN {name} {ty}"), [])?;
-            }
+        ] {
+            add_column(conn, "agents", name, ty)?;
         }
     }
-    // v3 adds only new tables, which init() already creates unconditionally.
+    if version < 4 {
+        // ping_tasks / tasks gain a multi-agent JSON column; the old single
+        // agent_id column stays as a compatibility mirror (NULL = all).
+        add_column(conn, "ping_tasks", "agent_ids", "TEXT")?;
+        add_column(conn, "tasks", "agent_ids", "TEXT")?;
+    }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
 }
@@ -460,11 +472,34 @@ pub fn ping_kind_from_str(s: &str) -> Option<PingKind> {
     }
 }
 
+fn parse_agent_ids(s: Option<String>) -> Vec<i64> {
+    match s {
+        None => Vec::new(),
+        Some(t) => serde_json::from_str(&t).unwrap_or_default(),
+    }
+}
+
+fn agent_ids_to_json(ids: &[i64]) -> String {
+    serde_json::to_string(ids).unwrap_or_else(|_| "[]".into())
+}
+
+/// Mirror for the legacy single-agent column: a one-element list is stored in
+/// agent_id, anything else (empty = all, multiple) leaves it NULL.
+fn compat_agent_id(ids: &[i64]) -> Option<i64> {
+    if ids.len() == 1 {
+        ids.first().copied()
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PingTaskRow {
     pub id: i64,
-    /// None = applies to every agent
+    /// Legacy mirror of `agent_ids` (single agent). Kept for compatibility.
     pub agent_id: Option<i64>,
+    /// Empty = applies to every agent; otherwise the targeted agent ids.
+    pub agent_ids: Vec<i64>,
     pub label: String,
     pub kind: String,
     pub target: String,
@@ -478,6 +513,7 @@ fn ping_task_from_row(r: &rusqlite::Row) -> rusqlite::Result<PingTaskRow> {
     Ok(PingTaskRow {
         id: r.get(0)?,
         agent_id: r.get(1)?,
+        agent_ids: parse_agent_ids(r.get(9)?),
         label: r.get(2)?,
         kind: r.get(3)?,
         target: r.get(4)?,
@@ -489,7 +525,7 @@ fn ping_task_from_row(r: &rusqlite::Row) -> rusqlite::Result<PingTaskRow> {
 }
 
 const PING_TASK_COLS: &str =
-    "id, agent_id, label, kind, target, port, interval_sec, probe_count, enabled";
+    "id, agent_id, label, kind, target, port, interval_sec, probe_count, enabled, agent_ids";
 
 pub fn list_ping_tasks(conn: &Connection) -> Result<Vec<PingTaskRow>> {
     let mut stmt =
@@ -502,15 +538,9 @@ pub fn list_ping_tasks(conn: &Connection) -> Result<Vec<PingTaskRow>> {
 
 /// Enabled tasks that apply to `agent_id`, converted to the wire spec.
 pub fn ping_tasks_for(conn: &Connection, agent_id: i64) -> Result<Vec<PingTaskSpec>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {PING_TASK_COLS} FROM ping_tasks
-         WHERE enabled = 1 AND (agent_id IS NULL OR agent_id = ?1) ORDER BY id"
-    ))?;
-    let rows = stmt
-        .query_map(params![agent_id], ping_task_from_row)?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(rows
+    Ok(list_ping_tasks(conn)?
         .into_iter()
+        .filter(|t| t.enabled && (t.agent_ids.is_empty() || t.agent_ids.contains(&agent_id)))
         .map(|t| PingTaskSpec {
             id: t.id,
             label: t.label,
@@ -526,10 +556,11 @@ pub fn ping_tasks_for(conn: &Connection, agent_id: i64) -> Result<Vec<PingTaskSp
 pub fn insert_ping_task(conn: &Connection, t: &PingTaskRow) -> Result<i64> {
     conn.execute(
         "INSERT INTO ping_tasks
-           (agent_id, label, kind, target, port, interval_sec, probe_count, enabled, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+           (agent_id, agent_ids, label, kind, target, port, interval_sec, probe_count, enabled, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
-            t.agent_id,
+            compat_agent_id(&t.agent_ids),
+            agent_ids_to_json(&t.agent_ids),
             t.label,
             t.kind,
             t.target,
@@ -545,11 +576,12 @@ pub fn insert_ping_task(conn: &Connection, t: &PingTaskRow) -> Result<i64> {
 
 pub fn update_ping_task(conn: &Connection, id: i64, t: &PingTaskRow) -> Result<usize> {
     let rows = conn.execute(
-        "UPDATE ping_tasks SET agent_id = ?2, label = ?3, kind = ?4, target = ?5,
-           port = ?6, interval_sec = ?7, probe_count = ?8, enabled = ?9 WHERE id = ?1",
+        "UPDATE ping_tasks SET agent_id = ?2, agent_ids = ?3, label = ?4, kind = ?5, target = ?6,
+           port = ?7, interval_sec = ?8, probe_count = ?9, enabled = ?10 WHERE id = ?1",
         params![
             id,
-            t.agent_id,
+            compat_agent_id(&t.agent_ids),
+            agent_ids_to_json(&t.agent_ids),
             t.label,
             t.kind,
             t.target,
@@ -640,8 +672,10 @@ pub struct TaskRow {
     pub id: i64,
     pub name: String,
     pub command: String,
-    /// None = applies to every agent
+    /// Legacy mirror of `agent_ids` (single agent). Kept for compatibility.
     pub agent_id: Option<i64>,
+    /// Empty = applies to every agent; otherwise the targeted agent ids.
+    pub agent_ids: Vec<i64>,
     /// Seconds; 0 = manual trigger only
     pub interval_sec: u64,
     pub timeout_sec: u64,
@@ -654,13 +688,14 @@ fn task_from_row(r: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         name: r.get(1)?,
         command: r.get(2)?,
         agent_id: r.get(3)?,
+        agent_ids: parse_agent_ids(r.get(7)?),
         interval_sec: r.get::<_, i64>(4)? as u64,
         timeout_sec: r.get::<_, i64>(5)? as u64,
         enabled: r.get::<_, i64>(6)? != 0,
     })
 }
 
-const TASK_COLS: &str = "id, name, command, agent_id, interval_sec, timeout_sec, enabled";
+const TASK_COLS: &str = "id, name, command, agent_id, interval_sec, timeout_sec, enabled, agent_ids";
 
 pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskRow>> {
     let mut stmt = conn.prepare(&format!("SELECT {TASK_COLS} FROM tasks ORDER BY id"))?;
@@ -684,16 +719,11 @@ pub fn get_task(conn: &Connection, id: i64) -> Result<Option<TaskRow>> {
 /// Enabled periodic tasks that apply to `agent_id`, converted to the wire spec.
 /// Manual-only tasks (interval 0) are excluded — they ship via `RunTask`.
 pub fn tasks_for(conn: &Connection, agent_id: i64) -> Result<Vec<CustomTaskSpec>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {TASK_COLS} FROM tasks
-         WHERE enabled = 1 AND interval_sec > 0 AND (agent_id IS NULL OR agent_id = ?1)
-         ORDER BY id"
-    ))?;
-    let rows = stmt
-        .query_map(params![agent_id], task_from_row)?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(rows
+    Ok(list_tasks(conn)?
         .into_iter()
+        .filter(|t| {
+            t.enabled && t.interval_sec > 0 && (t.agent_ids.is_empty() || t.agent_ids.contains(&agent_id))
+        })
         .map(|t| CustomTaskSpec {
             id: t.id,
             command: t.command,
@@ -705,12 +735,13 @@ pub fn tasks_for(conn: &Connection, agent_id: i64) -> Result<Vec<CustomTaskSpec>
 
 pub fn insert_task(conn: &Connection, t: &TaskRow) -> Result<i64> {
     conn.execute(
-        "INSERT INTO tasks (name, command, agent_id, interval_sec, timeout_sec, enabled, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO tasks (name, command, agent_id, agent_ids, interval_sec, timeout_sec, enabled, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             t.name,
             t.command,
-            t.agent_id,
+            compat_agent_id(&t.agent_ids),
+            agent_ids_to_json(&t.agent_ids),
             t.interval_sec as i64,
             t.timeout_sec as i64,
             t.enabled as i64,
@@ -722,13 +753,14 @@ pub fn insert_task(conn: &Connection, t: &TaskRow) -> Result<i64> {
 
 pub fn update_task(conn: &Connection, id: i64, t: &TaskRow) -> Result<usize> {
     let rows = conn.execute(
-        "UPDATE tasks SET name = ?2, command = ?3, agent_id = ?4,
-           interval_sec = ?5, timeout_sec = ?6, enabled = ?7 WHERE id = ?1",
+        "UPDATE tasks SET name = ?2, command = ?3, agent_id = ?4, agent_ids = ?5,
+           interval_sec = ?6, timeout_sec = ?7, enabled = ?8 WHERE id = ?1",
         params![
             id,
             t.name,
             t.command,
-            t.agent_id,
+            compat_agent_id(&t.agent_ids),
+            agent_ids_to_json(&t.agent_ids),
             t.interval_sec as i64,
             t.timeout_sec as i64,
             t.enabled as i64,

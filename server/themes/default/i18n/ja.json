@@ -237,5 +237,8 @@
   "settings.expiryDays": "期限アラート日数",
   "settings.expiryRange": "1〜365 の数値を入力してください",
   "billing.manage": "請求",
-  "billing.quota": "上限"
+  "billing.quota": "上限",
+  "common.add": "追加",
+  "host.addPingTask": "遅延監視タスクを追加",
+  "host.addPingTaskSub": "このホストのみに適用"
 }

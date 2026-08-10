@@ -237,5 +237,8 @@
   "settings.expiryDays": "Expiry alert window (days)",
   "settings.expiryRange": "Enter a value within 1..=365",
   "billing.manage": "Billing",
-  "billing.quota": "Quota"
+  "billing.quota": "Quota",
+  "common.add": "Add",
+  "host.addPingTask": "Add latency monitoring task",
+  "host.addPingTaskSub": "Applies to this host only"
 }

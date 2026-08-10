@@ -214,6 +214,57 @@
       return input.value === '' ? null : Number(input.value);
     }
 
+    /// Checkbox list for choosing which hosts a task applies to. Empty result
+    /// means "all hosts" (the backend's default). Checking "All hosts" selects
+    /// every host visually.
+    function agentMultiField(selectedIds) {
+      var wrap = node('div', 'agent-multi');
+      var allChecked = !selectedIds || !selectedIds.length;
+      function checkbox(labelText, checked, extraClass) {
+        var label = node('label', 'field-check' + (extraClass ? ' ' + extraClass : ''));
+        var input = node('input');
+        input.type = 'checkbox';
+        input.checked = !!checked;
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(labelText));
+        return { el: label, input: input };
+      }
+      var all = checkbox(t('common.allAgents'), allChecked, 'agent-multi-all');
+      wrap.appendChild(all.el);
+      var agentCbs = {};
+      adminAgents.forEach(function (agent) {
+        var cb = checkbox(agent.name || ('Agent #' + agent.agent_id),
+          selectedIds && selectedIds.indexOf(Number(agent.agent_id)) !== -1, 'agent-multi-item');
+        agentCbs[agent.agent_id] = cb;
+        wrap.appendChild(cb.el);
+      });
+      function syncAll() {
+        var ids = Object.keys(agentCbs);
+        all.input.checked = ids.length > 0 && ids.every(function (id) { return agentCbs[id].input.checked; });
+      }
+      all.input.addEventListener('change', function () {
+        var on = all.input.checked;
+        Object.keys(agentCbs).forEach(function (id) { agentCbs[id].input.checked = on; });
+      });
+      Object.keys(agentCbs).forEach(function (id) {
+        agentCbs[id].input.addEventListener('change', syncAll);
+      });
+      function collect() {
+        if (all.input.checked) return [];
+        var ids = [];
+        Object.keys(agentCbs).forEach(function (id) {
+          if (agentCbs[id].input.checked) ids.push(Number(id));
+        });
+        return ids;
+      }
+      return { el: wrap, collect: collect };
+    }
+
+    function formatScopes(ids) {
+      if (!ids || !ids.length) return t('common.allAgents');
+      return ids.map(function (id) { return formatAgent(id); }).join(', ');
+    }
+
     function openModal(title, build, submit) {
       options.title.textContent = title;
       options.fields.innerHTML = '';
@@ -435,7 +486,7 @@
       var refs = {};
       openModal(task.id == null ? t('pingTask.create') : t('pingTask.edit'), function (root) {
         refs.label = inputField('pingTask.label', task.label, { required: true });
-        refs.agent = selectField('common.agent', agentChoices(true), task.agent_id);
+        refs.agent = agentMultiField(task.agent_ids);
         refs.kind = selectField('pingTask.kind', ['icmp', 'tcp', 'http'].map(function (kind) {
           return { value: kind, label: kind.toUpperCase() };
         }), task.kind || 'icmp');
@@ -451,7 +502,7 @@
         updateKind();
       }, function () {
         return saveEntity('/api/admin/ping-tasks', task.id, {
-          agent_id: refs.agent.input.value === '' ? null : Number(refs.agent.input.value),
+          agent_ids: refs.agent.collect(),
           label: refs.label.input.value.trim(),
           kind: refs.kind.input.value,
           target: refs.target.input.value.trim(),
@@ -472,7 +523,7 @@
         options.content.appendChild(toolbar(t('admin.pingTasks'), t('pingTask.create'), function () { openPingTaskForm(null); }));
         var rows = tasks.map(function (task) {
           var target = task.target + (task.port == null ? '' : ':' + task.port);
-          return [task.label, formatAgent(task.agent_id), task.kind.toUpperCase(), target,
+          return [task.label, formatScopes(task.agent_ids), task.kind.toUpperCase(), target,
             task.interval_sec + 's', String(task.probe_count), enabledLabel(task.enabled),
             editActions(function () { openPingTaskForm(task); }, function () { deleteEntity('/api/admin/ping-tasks', task.id, renderPingTasks); })];
         });
@@ -490,7 +541,7 @@
       openModal(task.id == null ? t('task.create') : t('task.edit'), function (root) {
         refs.name = inputField('common.name', task.name, { required: true });
         refs.command = inputField('task.command', task.command, { required: true, textarea: true });
-        refs.agent = selectField('common.agent', agentChoices(true), task.agent_id);
+        refs.agent = agentMultiField(task.agent_ids);
         refs.interval = inputField('task.interval', task.interval_sec == null ? 0 : task.interval_sec, { type: 'number', required: true, min: 0 });
         refs.timeout = inputField('task.timeout', task.timeout_sec == null ? 30 : task.timeout_sec, { type: 'number', required: true, min: 1 });
         refs.enabled = checkboxField('common.enabled', task.enabled !== false);
@@ -501,7 +552,7 @@
         return saveEntity('/api/admin/tasks', task.id, {
           name: refs.name.input.value.trim(),
           command: refs.command.input.value,
-          agent_id: refs.agent.input.value === '' ? null : Number(refs.agent.input.value),
+          agent_ids: refs.agent.collect(),
           interval_sec: Number(refs.interval.input.value),
           timeout_sec: Number(refs.timeout.input.value),
           enabled: refs.enabled.input.checked
@@ -531,7 +582,7 @@
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('admin.tasks'), t('task.create'), function () { openTaskForm(null); }));
         var rows = tasks.map(function (task) {
-          return [task.name, formatAgent(task.agent_id), task.interval_sec === 0 ? t('task.manualOnly') : task.interval_sec + 's',
+          return [task.name, formatScopes(task.agent_ids), task.interval_sec === 0 ? t('task.manualOnly') : task.interval_sec + 's',
             task.timeout_sec + 's', enabledLabel(task.enabled),
             editActions(function () { openTaskForm(task); }, function () { deleteEntity('/api/admin/tasks', task.id, renderTasks); })];
         });

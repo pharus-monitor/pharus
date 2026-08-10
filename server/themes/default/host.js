@@ -33,6 +33,28 @@
   var diagEmpty = document.getElementById('diag-empty');
   var streamingMessage = document.getElementById('streaming-message');
   var streamingResults = document.getElementById('streaming-results');
+  var editModeBtn = document.getElementById('edit-mode-btn');
+  var tokenModal = document.getElementById('token-modal');
+  var tokenInput = document.getElementById('token-input');
+  var tokenErr = document.getElementById('token-err');
+  var editModal = document.getElementById('edit-modal');
+  var editTitle = document.getElementById('edit-title');
+  var editErr = document.getElementById('edit-err');
+  var fResetDay = document.getElementById('f-reset-day');
+  var fQuotaGb = document.getElementById('f-quota-gb');
+  var fExpiresOn = document.getElementById('f-expires-on');
+  var fPrice = document.getElementById('f-price');
+  var fCurrency = document.getElementById('f-currency');
+  var fCycle = document.getElementById('f-cycle');
+  var addtaskPanel = document.getElementById('host-addtask');
+  var atLabel = document.getElementById('at-label');
+  var atKind = document.getElementById('at-kind');
+  var atTarget = document.getElementById('at-target');
+  var atPortField = document.getElementById('at-port-field');
+  var atPort = document.getElementById('at-port');
+  var atInterval = document.getElementById('at-interval');
+  var atSubmit = document.getElementById('at-submit');
+  var atStatus = document.getElementById('at-status');
 
   var GAUGE_LEN = 251.33;
   var CURRENCY_SYMBOL = { CNY: '¥', USD: '$', EUR: '€' };
@@ -45,12 +67,15 @@
   var pingChartData = { tasks: [], points: [] };
   var pingLoadId = 0;
   var streamingLoadId = 0;
+  var adminToken = null;
+  var adminOn = false;
+  var editingId = null;
 
   /* ---------- host card ---------- */
   function buildCard() {
     var node = tpl.content.firstElementChild.cloneNode(true);
     hostCard.appendChild(node);
-    return {
+    var card = {
       el: node,
       name: P.field(node, 'name'),
       os: P.field(node, 'os'),
@@ -75,8 +100,11 @@
       pingSection: P.field(node, 'pingSection'),
       pings: P.field(node, 'pings'),
       unlockSection: P.field(node, 'unlockSection'),
-      unlock: P.field(node, 'unlock')
+      unlock: P.field(node, 'unlock'),
+      editBtn: P.field(node, 'editBtn')
     };
+    card.editBtn.addEventListener('click', function () { openEdit(hostId); });
+    return card;
   }
 
   function renderRegion() {
@@ -157,7 +185,8 @@
   function renderBilling() {
     var b = entry.billing;
     var tr = entry.traffic;
-    card.billing.hidden = !(hasBilling(b) || (tr && (tr.rx_bytes || tr.tx_bytes)));
+    card.billing.hidden = !(hasBilling(b) || adminOn || (tr && (tr.rx_bytes || tr.tx_bytes)));
+    card.editBtn.hidden = !adminOn;
     if (card.billing.hidden) return;
     b = b || {};
     tr = tr || {};
@@ -668,9 +697,132 @@
     }
   }
 
+  function checkToken(tok) {
+    return fetch('/api/admin/check', {
+      method: 'POST',
+      headers: tok ? { Authorization: 'Bearer ' + tok } : {}
+    }).then(function (r) { return r.status; }).catch(function () { return 0; });
+  }
+
+  function setAdmin(on) {
+    adminOn = on;
+    editModeBtn.classList.toggle('active', on);
+    addtaskPanel.hidden = !on;
+    if (card) renderBilling();
+  }
+
+  function handleUnauthorized() {
+    sessionStorage.removeItem('pharus.admin');
+    adminToken = null;
+    setAdmin(false);
+    tokenErr.textContent = t('admin.unauthorized');
+    tokenErr.hidden = false;
+    tokenModal.hidden = false;
+  }
+
+  function openEdit(id) {
+    var b = entry.billing || {};
+    editingId = id;
+    editTitle.textContent = entry.name || ('Agent #' + id);
+    fResetDay.value = b.reset_day != null ? b.reset_day : '';
+    fQuotaGb.value = b.quota_bytes != null ? Math.round(b.quota_bytes / 1073741824 * 100) / 100 : '';
+    fExpiresOn.value = b.expires_at != null ? P.fmtDate(b.expires_at) : '';
+    fPrice.value = b.price != null ? b.price : '';
+    fCurrency.value = b.currency || '';
+    fCycle.value = b.cycle || '';
+    editErr.hidden = true;
+    editModal.hidden = false;
+  }
+
+  function saveEdit() {
+    var body = {
+      reset_day: fResetDay.value === '' ? null : parseInt(fResetDay.value, 10),
+      quota_gb: fQuotaGb.value === '' ? null : parseFloat(fQuotaGb.value),
+      expires_on: fExpiresOn.value === '' ? null : fExpiresOn.value,
+      price: fPrice.value === '' ? null : parseFloat(fPrice.value),
+      currency: fCurrency.value || null,
+      cycle: fCycle.value || null
+    };
+    fetch('/api/admin/agents/' + editingId + '/billing', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (r.status === 401) throw 'unauthorized';
+      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
+      return r.json();
+    }).then(function (res) {
+      entry.billing = res.billing;
+      entry.traffic = res.traffic;
+      renderBilling();
+      editModal.hidden = true;
+    }).catch(function (e) {
+      if (e === 'unauthorized') handleUnauthorized();
+      else {
+        editErr.textContent = t('admin.error') + ': ' + e;
+        editErr.hidden = false;
+      }
+    });
+  }
+
+  function addPingTask() {
+    var label = atLabel.value.trim();
+    var target = atTarget.value.trim();
+    if (!label || !target) {
+      atStatus.textContent = t('common.error');
+      atStatus.className = 'inline-status error';
+      return;
+    }
+    var body = {
+      label: label,
+      kind: atKind.value,
+      target: target,
+      port: atKind.value === 'icmp' ? null : (atPort.value ? Number(atPort.value) : null),
+      interval_sec: Number(atInterval.value) || 60,
+      probe_count: 4,
+      enabled: true,
+      agent_ids: [hostId]
+    };
+    atStatus.textContent = t('common.saving');
+    atStatus.className = 'inline-status';
+    atSubmit.disabled = true;
+    fetch('/api/admin/ping-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (r.status === 401) throw 'unauthorized';
+      if (!r.ok) return r.json().then(function (j) { throw (j && j.error) || ('HTTP ' + r.status); });
+      return r.json();
+    }).then(function () {
+      atStatus.textContent = t('common.saved');
+      atStatus.className = 'inline-status ok';
+      atLabel.value = '';
+      atTarget.value = '';
+    }).catch(function (e) {
+      if (e === 'unauthorized') handleUnauthorized();
+      else {
+        atStatus.textContent = t('common.error') + ': ' + (e && e.message ? e.message : e);
+        atStatus.className = 'inline-status error';
+      }
+    }).then(function () { atSubmit.disabled = false; });
+  }
+
   function probeAdminLink() {
     P.requestJson('/api/meta').then(function (meta) {
-      if (meta.admin_enabled) adminLink.hidden = false;
+      if (!meta.admin_enabled) return;
+      adminLink.hidden = false;
+      editModeBtn.hidden = false;
+      var saved = sessionStorage.getItem('pharus.admin');
+      if (!saved) return;
+      checkToken(saved).then(function (st) {
+        if (st === 200) {
+          adminToken = saved;
+          setAdmin(true);
+        } else {
+          sessionStorage.removeItem('pharus.admin');
+        }
+      });
     }).catch(function () {});
   }
 
@@ -680,6 +832,55 @@
   diagPing.addEventListener('click', function () { runDiagnostic('ping'); });
   diagTraceroute.addEventListener('click', function () { runDiagnostic('traceroute'); });
   diagMtr.addEventListener('click', function () { runDiagnostic('mtr'); });
+  editModeBtn.addEventListener('click', function () {
+    if (adminOn) {
+      setAdmin(false);
+    } else if (adminToken) {
+      setAdmin(true);
+    } else {
+      tokenErr.hidden = true;
+      tokenInput.value = '';
+      tokenModal.hidden = false;
+      tokenInput.focus();
+    }
+  });
+  document.getElementById('token-submit').addEventListener('click', function () {
+    var tok = tokenInput.value.trim();
+    if (!tok) return;
+    checkToken(tok).then(function (st) {
+      if (st === 200) {
+        adminToken = tok;
+        sessionStorage.setItem('pharus.admin', tok);
+        tokenModal.hidden = true;
+        setAdmin(true);
+      } else {
+        tokenErr.textContent = t('admin.unauthorized');
+        tokenErr.hidden = false;
+      }
+    });
+  });
+  document.getElementById('token-cancel').addEventListener('click', function () {
+    tokenModal.hidden = true;
+  });
+  document.getElementById('edit-save').addEventListener('click', saveEdit);
+  document.getElementById('edit-cancel').addEventListener('click', function () {
+    editModal.hidden = true;
+  });
+  atSubmit.addEventListener('click', addPingTask);
+  atKind.addEventListener('change', function () {
+    atPortField.hidden = atKind.value === 'icmp';
+  });
+  [tokenModal, editModal].forEach(function (mask) {
+    mask.addEventListener('click', function (ev) {
+      if (ev.target === mask || ev.target.hasAttribute('data-close')) mask.hidden = true;
+    });
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') {
+      tokenModal.hidden = true;
+      editModal.hidden = true;
+    }
+  });
   var chartResizePending = false;
   window.addEventListener('resize', function () {
     if (chartResizePending) return;

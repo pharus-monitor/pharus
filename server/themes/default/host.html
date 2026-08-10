@@ -18,6 +18,7 @@
       </div>
       <div class="header-right">
         <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
+        <button id="edit-mode-btn" class="view-toggle" type="button" hidden data-i18n="admin.edit">编辑</button>
         <a id="admin-link" class="admin-link" href="admin.html" hidden data-i18n="nav.admin">管理</a>
         <span id="conn" class="conn-badge conn-down" role="status">
           <span class="conn-dot"></span>Connecting…
@@ -38,6 +39,43 @@
         </div>
       </div>
       <div class="hw-grid" id="hw-grid"></div>
+    </section>
+
+    <section class="hw-panel" id="host-addtask" hidden>
+      <div class="panel-head">
+        <div>
+          <h2 data-i18n="host.addPingTask">添加延迟监控任务</h2>
+          <p data-i18n="host.addPingTaskSub">仅应用到当前主机</p>
+        </div>
+      </div>
+      <div class="panel-controls addtask-controls">
+        <label class="field compact">
+          <span data-i18n="pingTask.label">名称</span>
+          <input id="at-label" type="text" />
+        </label>
+        <label class="field compact">
+          <span data-i18n="pingTask.kind">类型</span>
+          <select id="at-kind">
+            <option value="icmp">ICMP</option>
+            <option value="tcp" selected>TCP</option>
+            <option value="http">HTTP</option>
+          </select>
+        </label>
+        <label class="field compact">
+          <span data-i18n="pingTask.target">目标</span>
+          <input id="at-target" type="text" placeholder="example.com / 1.1.1.1" data-i18n-placeholder="diag.targetPlaceholder" />
+        </label>
+        <label class="field compact" id="at-port-field">
+          <span data-i18n="pingTask.port">端口</span>
+          <input id="at-port" type="number" min="1" max="65535" value="443" />
+        </label>
+        <label class="field compact">
+          <span data-i18n="pingTask.interval">间隔(秒)</span>
+          <input id="at-interval" type="number" min="5" value="60" />
+        </label>
+        <button class="btn primary" id="at-submit" type="button" data-i18n="common.add">添加</button>
+        <span class="inline-status" id="at-status"></span>
+      </div>
     </section>
 
     <div class="feature-grid" id="feature-grid">
@@ -198,6 +236,7 @@
           <div class="kv"><span class="k" data-i18n="billing.expires">Expires</span><span class="v" data-f="expires">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.price">Price</span><span class="v" data-f="price">—</span></div>
           <div class="kv"><span class="k" data-i18n="billing.resetDay">Reset day</span><span class="v" data-f="resetDay">—</span></div>
+          <div class="kv billing-edit-kv"><button class="edit-btn" type="button" data-f="editBtn" hidden data-i18n="admin.edit">编辑</button></div>
         </div>
       </div>
 
@@ -214,6 +253,74 @@
       </div>
     </article>
   </template>
+
+  <div class="modal-mask" id="token-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 data-i18n="admin.login">管理模式</h3>
+        <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
+      </div>
+      <label class="field">
+        <span data-i18n="admin.token">管理 Token</span>
+        <input type="password" id="token-input" autocomplete="off" />
+      </label>
+      <p class="modal-err" id="token-err" hidden></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="token-cancel" data-i18n="admin.cancel">取消</button>
+        <button class="btn primary" id="token-submit" data-i18n="admin.submit">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="edit-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="edit-title">编辑</h3>
+        <button class="modal-x" data-close data-i18n-aria="common.close" aria-label="关闭">×</button>
+      </div>
+      <label class="field">
+        <span data-i18n="admin.resetDay">每月重置日</span>
+        <input type="number" id="f-reset-day" min="1" max="31" />
+      </label>
+      <label class="field">
+        <span data-i18n="admin.quotaGb">流量配额 (GiB)</span>
+        <input type="number" id="f-quota-gb" min="0" step="1" />
+      </label>
+      <label class="field">
+        <span data-i18n="admin.expiresOn">到期日期</span>
+        <input type="date" id="f-expires-on" />
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span data-i18n="admin.price">价格</span>
+          <input type="number" id="f-price" min="0" step="0.01" />
+        </label>
+        <label class="field">
+          <span data-i18n="admin.currency">币种</span>
+          <select id="f-currency">
+            <option value="">—</option>
+            <option value="CNY">CNY ¥</option>
+            <option value="USD">USD $</option>
+            <option value="EUR">EUR €</option>
+          </select>
+        </label>
+        <label class="field">
+          <span data-i18n="admin.cycle">付费周期</span>
+          <select id="f-cycle">
+            <option value="">—</option>
+            <option value="monthly" data-i18n="billing.cycle.monthly">月付</option>
+            <option value="quarterly" data-i18n="billing.cycle.quarterly">季付</option>
+            <option value="yearly" data-i18n="billing.cycle.yearly">年付</option>
+          </select>
+        </label>
+      </div>
+      <p class="modal-err" id="edit-err" hidden></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="edit-cancel" data-i18n="admin.cancel">取消</button>
+        <button class="btn primary" id="edit-save" data-i18n="admin.save">保存</button>
+      </div>
+    </div>
+  </div>
 
   <script src="common.js"></script>
   <script src="host.js"></script>
