@@ -108,6 +108,12 @@ async fn themed_static(State(state): State<SharedState>, req: Request) -> Respon
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Same story as the agent: make the rustls provider deterministic so
+    // outbound TLS (lettre SMTP, reqwest webhooks) can't panic on ambiguity.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
