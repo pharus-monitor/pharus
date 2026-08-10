@@ -659,3 +659,7 @@ body::before {
 :root[data-theme="light"] .conn-down { color: #b45309; }
 :root[data-theme="light"] .kv .v.warn { color: #b45309; }
 :root[data-theme="light"] .kv .v.crit { color: #dc2626; }
+:root[data-theme="light"] .site-header { background: rgba(255, 255, 255, 0.80); }
+:root[data-theme="light"] .region-head { background: rgba(255, 255, 255, 0.65); }
+:root[data-theme="light"] .region-code { color: #d97706; }
+:root[data-theme="light"] .service-result { background: rgba(15, 23, 42, 0.05); }
