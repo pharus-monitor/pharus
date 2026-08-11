@@ -154,8 +154,16 @@ async fn collect_mem_desc() -> Option<String> {
         .ok()?
         .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
+        // SMBIOS placeholders reported by VMs and unprogrammed boards carry no
+        // information; fall back to the DIMM layout instead of showing "QEMU".
+        const PLACEHOLDER_MFR: &[&str] = &[
+            "QEMU", "KVM", "VMware", "Bochs", "Xen", "VirtualBox", "Oracle Corporation",
+            "Microsoft Corporation", "Not Specified", "No Module Installed", "Unknown",
+            "To Be Filled By O.E.M.",
+        ];
         let mut manufacturer = None;
         let mut speed = None;
+        let mut sizes: Vec<String> = Vec::new();
         for line in text.lines() {
             let l = line.trim();
             if let Some(v) = l.strip_prefix("Manufacturer:") {
@@ -168,13 +176,30 @@ async fn collect_mem_desc() -> Option<String> {
                 if !v.is_empty() && v != "Unknown" && speed.is_none() {
                     speed = Some(v.to_string());
                 }
+            } else if let Some(v) = l.strip_prefix("Size:") {
+                let v = v.trim();
+                if !v.is_empty() && v != "Unknown" && v != "No Module Installed" {
+                    sizes.push(v.to_string());
+                }
+            }
+        }
+        if let Some(m) = &manufacturer {
+            if PLACEHOLDER_MFR.iter().any(|p| m.eq_ignore_ascii_case(p)) {
+                manufacturer = None;
             }
         }
         match (manufacturer, speed) {
             (Some(m), Some(s)) => Some(format!("{m} {s}")),
             (Some(m), None) => Some(m),
             (None, Some(s)) => Some(s),
-            (None, None) => None,
+            (None, None) => match sizes.len() {
+                0 => None,
+                1 => Some(sizes[0].clone()),
+                _ if sizes.iter().all(|s| *s == sizes[0]) => {
+                    Some(format!("{} x {}", sizes.len(), sizes[0]))
+                }
+                _ => Some(sizes.join(" + ")),
+            },
         }
     }
 }

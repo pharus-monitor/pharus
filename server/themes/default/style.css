@@ -330,7 +330,7 @@ body.is-dragging { user-select: none; -webkit-user-select: none; }
 
 /* ---------- Billing section ---------- */
 .stat-cost { color: var(--beacon-300); font-size: 18px; padding-top: 3px; }
-.billing-kv { margin-top: 0.75rem; grid-template-columns: auto 1fr; }
+.billing-kv { margin-top: 0.75rem; }
 .billing-kv .kv, .billing-kv .kv .v { white-space: nowrap; }
 .billing-edit-kv { justify-content: flex-end; }
 .meter-fill.traffic { background: linear-gradient(90deg, var(--emerald-400), var(--sky-400)); box-shadow: 0 0 8px rgba(52, 211, 153, 0.35); }

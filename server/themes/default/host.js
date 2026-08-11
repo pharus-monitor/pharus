@@ -305,8 +305,8 @@
     card.diskVal.textContent = P.fmtBytes(d.disk_used) + ' / ' + P.fmtBytes(d.disk_total);
     card.swapFill.style.width = P.pct(d.swap_used, d.swap_total).toFixed(1) + '%';
     card.swapVal.textContent = P.fmtBytes(d.swap_used) + ' / ' + P.fmtBytes(d.swap_total);
-    card.rx.textContent = P.fmtRate(d.net_rx_bps);
-    card.tx.textContent = P.fmtRate(d.net_tx_bps);
+    card.rx.textContent = P.rateWithTotal(d.net_rx_bps, entry && entry.traffic ? entry.traffic.rx_bytes : 0);
+    card.tx.textContent = P.rateWithTotal(d.net_tx_bps, entry && entry.traffic ? entry.traffic.tx_bytes : 0);
     card.load.textContent = d.load1.toFixed(2);
     card.uptime.textContent = P.fmtUptime(d.uptime);
   }

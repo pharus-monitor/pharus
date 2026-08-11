@@ -122,6 +122,12 @@
     return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
   }
   function fmtRate(bps) { return bps == null ? '—' : fmtBytes(bps) + '/s'; }
+  /// "12.5 MiB/s · 1.2 GiB" — live rate plus the current billing-cycle total.
+  function rateWithTotal(bps, cycleTotal) {
+    var rate = fmtRate(bps);
+    if (cycleTotal) return rate + ' · ' + fmtBytes(cycleTotal);
+    return rate;
+  }
   function fmtUptime(s) {
     if (s == null) return '—';
     var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
@@ -327,6 +333,7 @@
     initTheme: initTheme,
     fmtBytes: fmtBytes,
     fmtRate: fmtRate,
+    rateWithTotal: rateWithTotal,
     fmtUptime: fmtUptime,
     fmtAmount: fmtAmount,
     fmtDate: fmtDate,

@@ -468,7 +468,7 @@
         card.expires.textContent = t('billing.expired');
         card.expires.className = 'v crit';
       } else {
-        card.expires.textContent = P.fmtDate(b.expires_at) + ' · ' + t('billing.daysLeft').replace('{n}', days);
+        card.expires.textContent = P.fmtDate(b.expires_at);
         card.expires.className = 'v' + (days <= 7 ? ' warn' : '');
       }
     } else {
@@ -507,7 +507,7 @@
     card.os.textContent = a.info ? a.info.os + ' · ' + a.info.cpu_cores + 'C' : '—';
     setStatus(card, a.online);
     if (a.data) {
-      renderMetrics(card, a.data);
+      renderMetrics(card, a.data, entry.traffic ? entry.traffic.rx_bytes : 0, entry.traffic ? entry.traffic.tx_bytes : 0);
     }
     renderBilling(card, entry);
     renderRegion(card, entry);
@@ -551,7 +551,7 @@
       state.set(msg.agent_id, a);
       var card = ensureCard(msg.agent_id);
       setStatus(card, msg.online);
-      renderMetrics(card, msg.data);
+      renderMetrics(card, msg.data, a.traffic ? a.traffic.rx_bytes : 0, a.traffic ? a.traffic.tx_bytes : 0);
       renderHeader();
     } else if (msg.type === 'status') {
       var b = state.get(msg.agent_id) || {};
