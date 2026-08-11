@@ -24,6 +24,7 @@ pub fn router() -> Router<SharedState> {
         .route("/api/agents/:id/streaming", get(streaming))
         .route("/api/diag/lg", post(diag_lg))
         .route("/api/diag/mtr", post(diag_mtr))
+        .route("/api/diag/iperf3", post(diag_iperf3))
 }
 
 /// Newest-first row cap, chosen so a 7 day window at the 60s history interval
@@ -219,4 +220,45 @@ struct MtrRequest {
 
 async fn diag_mtr(State(state): State<SharedState>, Json(body): Json<MtrRequest>) -> Response {
     diag_response(diag::start_mtr(&state, body.agent_id, &body.target, body.cycles))
+}
+
+#[derive(Debug, Deserialize)]
+struct Iperf3Request {
+    agent_id: i64,
+    server: String,
+    port: Option<u16>,
+    direction: Option<String>,
+    duration: Option<u32>,
+    parallel: Option<u32>,
+    protocol: Option<String>,
+    length: Option<u32>,
+}
+
+async fn diag_iperf3(State(state): State<SharedState>, Json(body): Json<Iperf3Request>) -> Response {
+    // The target still passes through diag::valid_target, which rejects shell
+    // metacharacters and leading dashes, so a user-supplied address cannot
+    // become argument or command injection.
+    let direction = body.direction.unwrap_or_else(|| "down".into());
+    if direction != "down" && direction != "up" {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "direction 必须为 up 或 down");
+    }
+    let protocol = body.protocol.unwrap_or_else(|| "tcp".into());
+    if protocol != "tcp" && protocol != "udp" {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "protocol 必须为 tcp 或 udp");
+    }
+    let duration = body.duration.unwrap_or(10).clamp(1, 15);
+    let parallel = body.parallel.unwrap_or(4).clamp(1, 16);
+    let length = body.length.map(|l| l.clamp(1, 1_048_576));
+    let port = body.port.unwrap_or(5201);
+    diag_response(diag::start_iperf3(
+        &state,
+        body.agent_id,
+        &body.server,
+        port,
+        &direction,
+        duration,
+        parallel,
+        &protocol,
+        length,
+    ))
 }

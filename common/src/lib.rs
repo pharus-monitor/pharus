@@ -148,6 +148,7 @@ pub enum TaskKind {
     Ping,
     Traceroute,
     Mtr,
+    Iperf3,
     Script,
 }
 
@@ -228,6 +229,17 @@ pub enum AgentMsg {
         #[serde(default = "default_true")]
         done: bool,
     },
+    /// Structured iperf3 result parsed from `iperf3 -J`.
+    Iperf3Result {
+        request_id: String,
+        direction: String,
+        #[serde(default)]
+        throughput_bps: Option<f64>,
+        #[serde(default)]
+        retransmits: Option<u32>,
+        #[serde(default)]
+        duration_s: Option<f64>,
+    },
     /// Agent-side region detection reported once per connection.
     Region { code: String },
 }
@@ -249,6 +261,10 @@ pub enum ServerToAgentMsg {
         /// Seconds before the agent kills the process; agent default when unset.
         #[serde(default)]
         timeout: Option<u64>,
+        /// Extra parameters for kinds that need more than target+cycles, e.g.
+        /// iperf3 {server, port, direction, duration, parallel}.
+        #[serde(default)]
+        extra: Option<serde_json::Value>,
     },
     TasksSync {
         ping_tasks: Vec<PingTaskSpec>,

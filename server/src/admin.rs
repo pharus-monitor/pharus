@@ -804,6 +804,7 @@ async fn run_task(
         target: task.command.clone(),
         cycles: None,
         timeout: Some(task.timeout_sec),
+        extra: None,
     });
     if sent.is_err() {
         state.task_waiters.lock().unwrap().remove(&request_id);
@@ -871,6 +872,14 @@ struct AlertRuleBody {
     channels: Vec<i64>,
     #[serde(default = "yes")]
     enabled: bool,
+    #[serde(default = "default_cooldown")]
+    cooldown: i64,
+    #[serde(default)]
+    task_id: Option<i64>,
+}
+
+fn default_cooldown() -> i64 {
+    1800
 }
 
 fn gt() -> String {
@@ -898,6 +907,9 @@ impl AlertRuleBody {
         if !(0.0..=1.0).contains(&self.ratio) {
             return Err("ratio must be within 0..=1".into());
         }
+        if !(0..=86_400).contains(&self.cooldown) {
+            return Err("cooldown must be within 0..=86400 seconds".into());
+        }
         if !(30..=86_400).contains(&self.duration) {
             return Err("duration must be within 30..=86400 seconds".into());
         }
@@ -908,6 +920,7 @@ impl AlertRuleBody {
             },
             _ => None,
         };
+        let task_id = if self.kind == "task" { self.task_id } else { None };
         Ok(db::AlertRuleRow {
             id: 0,
             name: self.name,
@@ -920,6 +933,8 @@ impl AlertRuleBody {
             ratio: self.ratio,
             channels: self.channels,
             enabled: self.enabled,
+            cooldown: self.cooldown,
+            task_id,
         })
     }
 }

@@ -68,6 +68,7 @@ fn dispatch(
     msg_kind: TaskKind,
     target: &str,
     cycles: Option<u32>,
+    extra: Option<serde_json::Value>,
 ) -> Result<String, DiagError> {
     if !valid_target(target) {
         return Err(DiagError::BadTarget);
@@ -117,6 +118,7 @@ fn dispatch(
         target: target.to_string(),
         cycles,
         timeout: None,
+        extra,
     });
     if sent.is_err() {
         state.diag_pending.lock().unwrap().remove(&request_id);
@@ -136,7 +138,7 @@ pub fn start_lg(
         "traceroute" => TaskKind::Traceroute,
         _ => return Err(DiagError::BadTarget),
     };
-    dispatch(state, agent_id, "lg", kind, task_kind, target, None)
+    dispatch(state, agent_id, "lg", kind, task_kind, target, None, None)
 }
 
 pub fn start_mtr(
@@ -146,7 +148,40 @@ pub fn start_mtr(
     cycles: Option<u32>,
 ) -> Result<String, DiagError> {
     let cycles = cycles.map(|c| c.clamp(1, 30));
-    dispatch(state, agent_id, "mtr", "mtr", TaskKind::Mtr, target, cycles)
+    dispatch(state, agent_id, "mtr", "mtr", TaskKind::Mtr, target, cycles, None)
+}
+
+/// iperf3 params are carried in `extra`; the server host still goes through
+/// the same argv-only `target` path so no shell injection is possible.
+pub fn start_iperf3(
+    state: &SharedState,
+    agent_id: i64,
+    server: &str,
+    port: u16,
+    direction: &str,
+    duration: u32,
+    parallel: u32,
+    protocol: &str,
+    length: Option<u32>,
+) -> Result<String, DiagError> {
+    let extra = serde_json::json!({
+        "port": port,
+        "direction": direction,
+        "duration": duration,
+        "parallel": parallel,
+        "protocol": protocol,
+        "length": length,
+    });
+    dispatch(
+        state,
+        agent_id,
+        "iperf3",
+        "iperf3",
+        TaskKind::Iperf3,
+        server,
+        None,
+        Some(extra),
+    )
 }
 
 fn take_pending(state: &SharedState, request_id: &str, agent_id: i64, done: bool) -> Option<String> {
@@ -261,6 +296,37 @@ pub fn relay_mtr(state: &SharedState, agent_id: i64, request_id: String, hops: V
         result,
         done,
         exit_code: if done { Some(0) } else { None },
+    });
+}
+
+/// Relay the final structured iperf3 result to the requesting browser.
+pub fn relay_iperf3(
+    state: &SharedState,
+    agent_id: i64,
+    request_id: String,
+    direction: String,
+    throughput_bps: Option<f64>,
+    retransmits: Option<u32>,
+    duration_s: Option<f64>,
+) {
+    if take_pending(state, &request_id, agent_id, true).is_none() {
+        return;
+    }
+    let result = serde_json::json!({
+        "direction": direction,
+        "throughput_bps": throughput_bps,
+        "retransmits": retransmits,
+        "duration_s": duration_s,
+    });
+    state.broadcast(BrowserMsg::DiagResult {
+        request_id,
+        agent_id,
+        kind: "iperf3".into(),
+        stream: None,
+        data: None,
+        result: Some(result),
+        done: true,
+        exit_code: Some(0),
     });
 }
 

@@ -37,7 +37,7 @@
     ]
   };
 
-  var FEATURE_NAMES = ['lg', 'mtr', 'streaming', 'ping', 'tasks'];
+  var FEATURE_NAMES = ['lg', 'mtr', 'iperf3', 'streaming', 'ping', 'tasks'];
 
   function node(tag, className, text) {
     var result = document.createElement(tag);
@@ -304,8 +304,9 @@
     }
 
     /* ---------- Alert rules ---------- */
-    function openAlertForm(rule, channels) {
+    function openAlertForm(rule, channels, tasks) {
       rule = rule || {};
+      tasks = tasks || [];
       var refs = {};
       openModal(rule.id == null ? t('alert.create') : t('alert.edit'), function (root) {
         var explain = node('p', 'rule-explain', t('alert.semantics'));
@@ -324,8 +325,12 @@
         refs.threshold = inputField('alert.threshold', rule.threshold == null ? 80 : rule.threshold, { type: 'number', required: true, step: 'any' });
         refs.duration = inputField('alert.duration', rule.duration == null ? 300 : rule.duration, { type: 'number', required: true, min: 1 });
         refs.ratio = inputField('alert.ratio', rule.ratio == null ? 1 : rule.ratio, { type: 'number', required: true, min: 0, max: 1, step: 0.01 });
+        refs.cooldown = inputField('alert.cooldown', rule.cooldown == null ? 1800 : rule.cooldown, { type: 'number', min: 0 });
+        refs.taskId = selectField('alert.task', [{ value: '', label: '—' }].concat(tasks.map(function (task) {
+          return { value: String(task.id), label: task.name };
+        })), rule.task_id == null ? '' : String(rule.task_id));
         refs.enabled = checkboxField('common.enabled', rule.enabled !== false);
-        [refs.name, refs.kind, refs.agent, refs.metric, refs.op, refs.threshold, refs.duration, refs.ratio].forEach(function (ref) { root.appendChild(ref.el); });
+        [refs.name, refs.kind, refs.agent, refs.metric, refs.op, refs.threshold, refs.duration, refs.ratio, refs.cooldown, refs.taskId].forEach(function (ref) { root.appendChild(ref.el); });
         var channelBox = fieldLabel('alert.channels');
         var selectedChannels = Array.isArray(rule.channels) ? rule.channels.map(Number) : [];
         refs.channels = [];
@@ -342,6 +347,7 @@
           var kind = refs.kind.input.value;
           refs.metric.el.hidden = kind !== 'metric';
           refs.op.el.hidden = kind === 'offline';
+          refs.taskId.el.hidden = kind !== 'task';
           refs.threshold.label.textContent = t(kind === 'offline' ? 'alert.gracePeriod' : 'alert.threshold');
         }
         refs.kind.input.addEventListener('change', updateKind);
@@ -357,6 +363,8 @@
           threshold: Number(refs.threshold.input.value),
           duration: Number(refs.duration.input.value),
           ratio: Number(refs.ratio.input.value),
+          cooldown: Number(refs.cooldown.input.value),
+          task_id: kind === 'task' && refs.taskId.input.value ? Number(refs.taskId.input.value) : null,
           channels: refs.channels.filter(function (input) { return input.checked; }).map(function (input) { return Number(input.value); }),
           enabled: refs.enabled.input.checked
         }).then(function () { closeModal(); renderAlerts(); });
@@ -368,15 +376,17 @@
       Promise.all([
         options.request('/api/admin/alert-rules'),
         options.request('/api/admin/channels'),
-        loadAgents()
+        loadAgents(),
+        options.request('/api/admin/tasks')
       ]).then(function (values) {
         if (!active || currentView !== 'alerts') return;
         var rules = Array.isArray(values[0]) ? values[0] : [];
         var channels = Array.isArray(values[1]) ? values[1] : [];
+        var tasks = Array.isArray(values[3]) ? values[3] : [];
         var channelNames = {};
         channels.forEach(function (channel) { channelNames[channel.id] = channel.name; });
         options.content.innerHTML = '';
-        options.content.appendChild(toolbar(t('admin.alerts'), t('alert.create'), function () { openAlertForm(null, channels); }));
+        options.content.appendChild(toolbar(t('admin.alerts'), t('alert.create'), function () { openAlertForm(null, channels, tasks); }));
         options.content.appendChild(node('p', 'rule-explain', t('alert.semantics')));
         var rows = rules.map(function (rule) {
           var condition = rule.kind === 'offline'
@@ -387,7 +397,7 @@
             rule.name, t('alert.kind.' + rule.kind), formatAgent(rule.agent_id), condition, windowText,
             (rule.channels || []).map(function (id) { return channelNames[id] || ('#' + id); }).join(', ') || '—',
             enabledLabel(rule.enabled),
-            editActions(function () { openAlertForm(rule, channels); }, function () { deleteEntity('/api/admin/alert-rules', rule.id, renderAlerts); })
+            editActions(function () { openAlertForm(rule, channels, tasks); }, function () { deleteEntity('/api/admin/alert-rules', rule.id, renderAlerts); })
           ];
         });
         options.content.appendChild(makeTable([

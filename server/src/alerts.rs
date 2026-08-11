@@ -105,7 +105,16 @@ impl Evaluator {
                 let observation = match rule.kind.as_str() {
                     "metric" => metric_observation(rule, agent),
                     "offline" => Some(self.offline_observation(rule, agent, now)),
-                    "task" => task_observations.get(&agent.id).cloned(),
+                    "task" => {
+                        if let Some(tid) = rule.task_id {
+                            task_observations.get(&(agent.id, tid)).cloned()
+                        } else {
+                            task_observations
+                                .iter()
+                                .find(|((a, _), _)| *a == agent.id)
+                                .map(|(_, o)| o.clone())
+                        }
+                    }
                     _ => None,
                 };
                 let Some(observation) = observation else {
@@ -217,10 +226,14 @@ impl Evaluator {
             "alert transition"
         );
 
+        // Recovery always notifies; repeated firings respect the cooldown so a
+        // flapping host does not re-page on every transition.
+        let last_notify = self.states.get(&key).map(|s| s.last_notify).unwrap_or(0);
+        let notify = !status.firing || now.saturating_sub(last_notify) >= rule.cooldown.max(0);
         let persisted = AlertStateRow {
             firing: status.firing,
             since: if status.firing { now } else { 0 },
-            last_notify: now,
+            last_notify: if notify { now } else { last_notify },
         };
         self.states.insert(key, persisted.clone());
 
@@ -239,21 +252,23 @@ impl Evaluator {
             );
         }
 
-        let action = if status.firing { "触发" } else { "恢复" };
-        let notification = Notification {
-            title: format!("Pharus 告警{action}：{}", rule.name),
-            body: format!(
-                "主机：{}\n规则：{}\n观测值：{}\n阈值：{}\n窗口：{} 秒\n窗口超限比例：{:.1}%（要求 ≥ {:.1}%）",
-                agent.name,
-                rule.name,
-                observation.observed,
-                observation.threshold,
-                rule.duration.max(0),
-                status.breach_ratio * 100.0,
-                normalized_ratio(rule.ratio) * 100.0,
-            ),
-        };
-        crate::notify::dispatch(state, &rule.channels, &notification).await;
+        if notify {
+            let action = if status.firing { "触发" } else { "恢复" };
+            let notification = Notification {
+                title: format!("Pharus 告警{action}：{}", rule.name),
+                body: format!(
+                    "主机：{}\n规则：{}\n观测值：{}\n阈值：{}\n窗口：{} 秒\n窗口超限比例：{:.1}%（要求 ≥ {:.1}%）",
+                    agent.name,
+                    rule.name,
+                    observation.observed,
+                    observation.threshold,
+                    rule.duration.max(0),
+                    status.breach_ratio * 100.0,
+                    normalized_ratio(rule.ratio) * 100.0,
+                ),
+            };
+            crate::notify::dispatch(state, &rule.channels, &notification).await;
+        }
     }
 }
 
@@ -396,11 +411,9 @@ fn build_task_observations(
     agents: &[AgentSnapshot],
     tasks: &[TaskRow],
     latest: &LatestTaskResults,
-) -> HashMap<i64, Observation> {
+) -> HashMap<(i64, i64), Observation> {
     let mut observations = HashMap::new();
     for agent in agents {
-        let mut has_result = false;
-        let mut newest_failure: Option<(&TaskRow, CompactTaskResult)> = None;
         for task in tasks.iter().filter(|task| {
             task.agent_id
                 .is_none_or(|configured_id| configured_id == agent.id)
@@ -408,32 +421,17 @@ fn build_task_observations(
             let Some(&result) = latest.get(&(task.id, agent.id)) else {
                 continue;
             };
-            has_result = true;
-            if result.exit_code != 0
-                && newest_failure
-                    .as_ref()
-                    .is_none_or(|(_, current)| result.ts > current.ts)
-            {
-                newest_failure = Some((task, result));
-            }
-        }
-
-        if let Some((task, result)) = newest_failure {
+            let breached = result.exit_code != 0;
             observations.insert(
-                agent.id,
+                (agent.id, task.id),
                 Observation {
-                    observed: format!("任务“{}”退出码 {}", task.name, result.exit_code),
+                    observed: if breached {
+                        format!("任务“{}”退出码 {}", task.name, result.exit_code)
+                    } else {
+                        format!("任务“{}”最近退出码 0", task.name)
+                    },
                     threshold: "任务退出码 ≠ 0".to_string(),
-                    breached: true,
-                },
-            );
-        } else if has_result {
-            observations.insert(
-                agent.id,
-                Observation {
-                    observed: "所有适用任务最近退出码均为 0".to_string(),
-                    threshold: "任务退出码 ≠ 0".to_string(),
-                    breached: false,
+                    breached,
                 },
             );
         }

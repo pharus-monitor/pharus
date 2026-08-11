@@ -128,6 +128,8 @@ pub fn init(conn: &Connection) -> Result<()> {
           ratio      REAL NOT NULL DEFAULT 1.0,
           channels   TEXT NOT NULL DEFAULT '[]',
           enabled    INTEGER NOT NULL DEFAULT 1,
+          cooldown   INTEGER NOT NULL DEFAULT 1800,
+          task_id    INTEGER,
           created_at INTEGER NOT NULL
         );
 
@@ -163,7 +165,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -213,6 +215,11 @@ fn migrate(conn: &Connection) -> Result<()> {
         add_column(conn, "agents", "traffic_dir", "TEXT")?;
         // Hostname reported by agents, used to match shared-secret logins.
         add_column(conn, "agents", "hostname", "TEXT")?;
+    }
+    if version < 7 {
+        // Alert notify cooldown and per-task failure rules.
+        add_column(conn, "alert_rules", "cooldown", "INTEGER NOT NULL DEFAULT 1800")?;
+        add_column(conn, "alert_rules", "task_id", "INTEGER")?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
@@ -1059,6 +1066,10 @@ pub struct AlertRuleRow {
     /// Notification channel ids
     pub channels: Vec<i64>,
     pub enabled: bool,
+    /// Seconds between notifications for repeated firings (default 1800).
+    pub cooldown: i64,
+    /// For kind = "task": only fire on failures of this task.
+    pub task_id: Option<i64>,
 }
 
 fn alert_rule_from_row(r: &rusqlite::Row) -> rusqlite::Result<AlertRuleRow> {
@@ -1075,11 +1086,13 @@ fn alert_rule_from_row(r: &rusqlite::Row) -> rusqlite::Result<AlertRuleRow> {
         ratio: r.get(9)?,
         channels: serde_json::from_str(&channels).unwrap_or_default(),
         enabled: r.get::<_, i64>(10)? != 0,
+        cooldown: r.get::<_, i64>(11)?,
+        task_id: r.get(12)?,
     })
 }
 
 const ALERT_RULE_COLS: &str =
-    "id, name, kind, agent_id, metric, op, threshold, duration, channels, ratio, enabled";
+    "id, name, kind, agent_id, metric, op, threshold, duration, channels, ratio, enabled, cooldown, task_id";
 
 pub fn list_alert_rules(conn: &Connection) -> Result<Vec<AlertRuleRow>> {
     let mut stmt =
@@ -1093,8 +1106,8 @@ pub fn list_alert_rules(conn: &Connection) -> Result<Vec<AlertRuleRow>> {
 pub fn insert_alert_rule(conn: &Connection, a: &AlertRuleRow) -> Result<i64> {
     conn.execute(
         "INSERT INTO alert_rules
-           (name, kind, agent_id, metric, op, threshold, duration, ratio, channels, enabled, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+           (name, kind, agent_id, metric, op, threshold, duration, ratio, channels, enabled, cooldown, task_id, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         params![
             a.name,
             a.kind,
@@ -1106,6 +1119,8 @@ pub fn insert_alert_rule(conn: &Connection, a: &AlertRuleRow) -> Result<i64> {
             a.ratio,
             serde_json::to_string(&a.channels).unwrap_or_else(|_| "[]".into()),
             a.enabled as i64,
+            a.cooldown,
+            a.task_id,
             now_ts(),
         ],
     )?;
@@ -1115,7 +1130,8 @@ pub fn insert_alert_rule(conn: &Connection, a: &AlertRuleRow) -> Result<i64> {
 pub fn update_alert_rule(conn: &Connection, id: i64, a: &AlertRuleRow) -> Result<usize> {
     let rows = conn.execute(
         "UPDATE alert_rules SET name = ?2, kind = ?3, agent_id = ?4, metric = ?5, op = ?6,
-           threshold = ?7, duration = ?8, ratio = ?9, channels = ?10, enabled = ?11 WHERE id = ?1",
+           threshold = ?7, duration = ?8, ratio = ?9, channels = ?10, enabled = ?11,
+           cooldown = ?12, task_id = ?13 WHERE id = ?1",
         params![
             id,
             a.name,
@@ -1128,6 +1144,8 @@ pub fn update_alert_rule(conn: &Connection, id: i64, a: &AlertRuleRow) -> Result
             a.ratio,
             serde_json::to_string(&a.channels).unwrap_or_else(|_| "[]".into()),
             a.enabled as i64,
+            a.cooldown,
+            a.task_id,
         ],
     )?;
     Ok(rows)

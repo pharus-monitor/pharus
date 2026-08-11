@@ -584,6 +584,7 @@ fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tok
             c
         }
         TaskKind::Mtr => return None,
+        TaskKind::Iperf3 => return None,
         TaskKind::Script => {
             let mut c = std::process::Command::new("cmd");
             c.args(["/C", target]);
@@ -608,6 +609,7 @@ fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tok
             c.args(["--raw", "-c", &cycles, target]);
             c
         }
+        TaskKind::Iperf3 => return None,
         TaskKind::Script => {
             let mut c = std::process::Command::new("sh");
             c.args(["-c", target]);
@@ -874,6 +876,7 @@ async fn stream_task(
     kind: TaskKind,
     target: String,
     cycles: Option<u32>,
+    extra: Option<serde_json::Value>,
 ) {
     let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
         request_id: request_id.clone(),
@@ -885,6 +888,10 @@ async fn stream_task(
 
     if kind == TaskKind::Mtr {
         stream_mtr(msg_tx, request_id, &target, cycles).await;
+        return;
+    }
+    if kind == TaskKind::Iperf3 {
+        stream_iperf3(msg_tx, request_id, &target, extra).await;
         return;
     }
 
@@ -920,6 +927,150 @@ async fn stream_task(
         let _ = p.await;
     }
     let _ = msg_tx.send(finish(String::new(), exit_code));
+}
+
+/// Runs iperf3 in JSON mode (`-J`), streaming the raw output back and ending
+/// with a parsed structured result. A missing binary degrades to a message.
+async fn stream_iperf3(
+    msg_tx: MsgTx,
+    request_id: String,
+    target: &str,
+    extra: Option<serde_json::Value>,
+) {
+    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
+        request_id: request_id.clone(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    };
+    let port = extra
+        .as_ref()
+        .and_then(|e| e.get("port"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5201)
+        .clamp(1, 65535);
+    let direction = extra
+        .as_ref()
+        .and_then(|e| e.get("direction"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("down")
+        .to_string();
+    let duration = extra
+        .as_ref()
+        .and_then(|e| e.get("duration"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10)
+        .clamp(1, 15);
+    let parallel = extra
+        .as_ref()
+        .and_then(|e| e.get("parallel"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(4)
+        .clamp(1, 16);
+    let down = direction == "down";
+    let protocol = extra
+        .as_ref()
+        .and_then(|e| e.get("protocol"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("tcp")
+        .to_string();
+    let length = extra
+        .as_ref()
+        .and_then(|e| e.get("length"))
+        .and_then(|v| v.as_u64());
+
+    let mut cmd = tokio::process::Command::new("iperf3");
+    cmd.arg("-J")
+        .arg("-c")
+        .arg(target)
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-t")
+        .arg(duration.to_string())
+        .arg("-P")
+        .arg(parallel.to_string());
+    if protocol == "udp" {
+        // UDP tests require a target bitrate; 1 Gbps is a sensible default
+        // when the caller did not pick a specific one.
+        cmd.arg("-u").arg("-b").arg("1G");
+    }
+    if let Some(length) = length {
+        cmd.arg("-l").arg(length.to_string());
+    }
+    if down {
+        cmd.arg("-R");
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = msg_tx.send(finish(
+                format!("iperf3 is not installed on this agent ({e})\n"),
+                -1,
+            ));
+            return;
+        }
+    };
+
+    let stdout = read_pipe_string(child.stdout.take()).await;
+    let stderr = read_pipe_string(child.stderr.take()).await;
+    let exit_code = match tokio::time::timeout(Duration::from_secs(duration + 30), child.wait()).await {
+        Ok(Ok(s)) => s.code().unwrap_or(-1),
+        Ok(Err(_)) => -1,
+        Err(_) => {
+            let _ = child.kill().await;
+            -1
+        }
+    };
+    let text = if stdout.trim().is_empty() { stderr } else { stdout };
+    if exit_code != 0 {
+        let _ = msg_tx.send(finish(text.clone(), exit_code));
+        return;
+    }
+    // A successful run ends with the structured result; the raw -J JSON is
+    // deliberately not streamed so the browser shows a clean summary.
+    let (bps, retrans, secs) = parse_iperf3_json(&text, &direction);
+    let _ = msg_tx.send(AgentMsg::Iperf3Result {
+        request_id,
+        direction,
+        throughput_bps: bps,
+        retransmits: retrans,
+        duration_s: secs,
+    });
+}
+
+async fn read_pipe_string<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> String {
+    let Some(mut pipe) = pipe else {
+        return String::new();
+    };
+    let mut buf = String::new();
+    let _ = tokio::io::AsyncReadExt::read_to_string(&mut pipe, &mut buf).await;
+    buf
+}
+
+/// Extracts the aggregate throughput from `iperf3 -J` output. Download (-R)
+/// reports on `sum_received`, upload on `sum_sent`.
+fn parse_iperf3_json(text: &str, direction: &str) -> (Option<f64>, Option<u32>, Option<f64>) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return (None, None, None);
+    };
+    let sum = v
+        .get("end")
+        .and_then(|e| {
+            if direction == "up" {
+                e.get("sum_sent")
+            } else {
+                e.get("sum_received")
+            }
+        });
+    let Some(sum) = sum else {
+        return (None, None, None);
+    };
+    let bps = sum.get("bits_per_second").and_then(|b| b.as_f64());
+    let retrans = sum.get("retransmits").and_then(|r| r.as_u64()).map(|r| r as u32);
+    let secs = sum.get("seconds").and_then(|s| s.as_f64());
+    (bps, retrans, secs)
 }
 
 /// Streams a live MTR table: parses `mtr --raw` lines as they arrive and sends
@@ -1105,6 +1256,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
                             target,
                             cycles: _,
                             timeout,
+                            extra: _,
                         }) => {
                             let msg_tx = msg_tx.clone();
                             tokio::spawn(async move {
@@ -1119,8 +1271,22 @@ async fn run_session(cfg: &Config) -> Result<()> {
                                 });
                             });
                         }
-                        Ok(ServerToAgentMsg::RunTask { task_id, kind, target, cycles, .. }) => {
-                            tokio::spawn(stream_task(msg_tx.clone(), task_id, kind, target, cycles));
+                        Ok(ServerToAgentMsg::RunTask {
+                            task_id,
+                            kind,
+                            target,
+                            cycles,
+                            timeout: _,
+                            extra,
+                        }) => {
+                            tokio::spawn(stream_task(
+                                msg_tx.clone(),
+                                task_id,
+                                kind,
+                                target,
+                                cycles,
+                                extra,
+                            ));
                         }
                         _ => {}
                     },
