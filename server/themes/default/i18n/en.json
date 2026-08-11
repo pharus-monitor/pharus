@@ -95,6 +95,7 @@
   "diag.targetPlaceholder": "example.com / 1.1.1.1",
   "diag.targetRequired": "Enter a target",
   "diag.title": "Network diagnostics",
+  "diag.tabLg": "Looking Glass",
   "diag.traceroute": "Traceroute",
   "feature.agentOverrides": "Agent overrides",
   "feature.diagnostics": "Network diagnostics",

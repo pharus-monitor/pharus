@@ -36,6 +36,10 @@
   var diagIperfProtocol = document.getElementById('diag-iperf-protocol');
   var diagIperfLength = document.getElementById('diag-iperf-length');
   var diagIperfBtn = document.getElementById('diag-iperf-btn');
+  var diagTabLg = document.getElementById('diag-tab-lg');
+  var diagTabIperf = document.getElementById('diag-tab-iperf');
+  var diagLgGroup = document.getElementById('diag-lg-group');
+  var diagIperfGroup = document.getElementById('diag-iperf-group');
   var diagError = document.getElementById('diag-error');
   var diagSessions = document.getElementById('diag-sessions');
   var diagEmpty = document.getElementById('diag-empty');
@@ -552,6 +556,14 @@
   }
 
   /* ---------- diagnostics ---------- */
+  function showDiagTab(which) {
+    var lg = which === 'lg';
+    diagTabLg.classList.toggle('active', lg);
+    diagTabIperf.classList.toggle('active', !lg);
+    diagLgGroup.hidden = !lg;
+    diagIperfGroup.hidden = lg;
+  }
+
   function updateDiagGate() {
     var online = !!entry && !!entry.online;
     var lg = !!entry && P.hasFeature(entry, 'lg');
@@ -563,7 +575,8 @@
     diagPing.disabled = !online;
     diagTraceroute.disabled = !online;
     diagMtr.disabled = !online;
-    diagIperfBox.hidden = !iperf3;
+    diagTabIperf.hidden = !iperf3;
+    if (!iperf3 && !diagIperfGroup.hidden) showDiagTab('lg');
     diagIperfBtn.disabled = !online;
     document.querySelector('.cycles-field').hidden = !mtr;
     if (entry && !online) {
@@ -674,20 +687,32 @@
     return Number.isFinite(n) ? n.toFixed(1) : '0.0';
   }
 
-  /* Renders hops like the live `mtr` curses table, rebuilt on each snapshot. */
+  /* Renders hops like the live `mtr` curses table, rebuilt on each snapshot.
+     Hosts wider than the column wrap onto indented continuation lines, with
+     the stats columns on the last line so alignment never breaks. */
   function renderMtrTable(request, hops) {
-    var rows = [mtrPad('Host', 27) + 'Loss%   Snt   Last    Avg   Best   Wrst  StDev'];
+    var COLS = 27;
+    var rows = [mtrPad('Host', COLS) + 'Loss%   Snt   Last    Avg   Best   Wrst  StDev'];
     hops.forEach(function (h) {
-      rows.push(
-        mtrPad(h.hop + '.|-- ' + (h.host || '???'), 27)
-        + mtrPad(((Number(h.loss) || 0) * 100).toFixed(1) + '%', 7)
+      var prefix = h.hop + '.|-- ';
+      var host = h.host || '???';
+      var stats = mtrPad(((Number(h.loss) || 0) * 100).toFixed(1) + '%', 7)
         + mtrPad(h.sent || 0, 6)
         + mtrPad(mtrNum(h.last), 7)
         + mtrPad(mtrNum(h.avg), 7)
         + mtrPad(mtrNum(h.best), 7)
         + mtrPad(mtrNum(h.worst), 7)
-        + mtrNum(h.stdev)
-      );
+        + mtrNum(h.stdev);
+      var parts = [host.slice(0, COLS - prefix.length)];
+      var rest = host.slice(COLS - prefix.length);
+      while (rest.length) {
+        parts.push(rest.slice(0, COLS - 6));
+        rest = rest.slice(COLS - 6);
+      }
+      for (var i = 0; i < parts.length; i++) {
+        var line = mtrPad((i === 0 ? prefix : '      ') + parts[i], COLS);
+        rows.push(i === parts.length - 1 ? line + stats : line.trimEnd());
+      }
     });
     request.output.textContent = rows.join('\n') + '\n';
   }
@@ -1092,6 +1117,8 @@
   diagTraceroute.addEventListener('click', function () { runDiagnostic('traceroute'); });
   diagMtr.addEventListener('click', function () { runDiagnostic('mtr'); });
   diagIperfBtn.addEventListener('click', runIperf3);
+  diagTabLg.addEventListener('click', function () { showDiagTab('lg'); });
+  diagTabIperf.addEventListener('click', function () { showDiagTab('iperf'); });
   editModeBtn.addEventListener('click', function () {
     if (adminOn) {
       setAdmin(false);

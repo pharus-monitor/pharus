@@ -738,6 +738,8 @@ async fn run_task(
 /// Per-hop state accumulated from `mtr --raw` lines.
 #[derive(Default)]
 struct RawHop {
+    /// Address from the `h` line, used to recognize the target hop.
+    ip: String,
     host: String,
     sent: u32,
     rtts: Vec<f64>,
@@ -757,6 +759,9 @@ fn parse_mtr_raw(line: &str, hops: &mut std::collections::BTreeMap<u32, RawHop>)
         "x" => hop.sent += 1,
         "h" => {
             let v = it.next().unwrap_or("");
+            if hop.ip.is_empty() {
+                hop.ip = v.into();
+            }
             if hop.host.is_empty() {
                 hop.host = v.into();
             }
@@ -777,9 +782,23 @@ fn parse_mtr_raw(line: &str, hops: &mut std::collections::BTreeMap<u32, RawHop>)
     true
 }
 
-fn raw_hops_snapshot(hops: &std::collections::BTreeMap<u32, RawHop>) -> Vec<MtrHop> {
+fn raw_hops_snapshot(
+    hops: &std::collections::BTreeMap<u32, RawHop>,
+    target_ips: &[std::net::IpAddr],
+) -> Vec<MtrHop> {
+    // Like CLI mtr, the table stops at the target: later hops are duplicate
+    // answers from the target itself and only confuse the readout.
+    let cut = if target_ips.is_empty() {
+        None
+    } else {
+        hops
+            .iter()
+            .find(|(_, h)| target_ips.iter().any(|ip| ip.to_string() == h.ip))
+            .map(|(idx, _)| *idx)
+    };
     hops
         .iter()
+        .take_while(|(idx, _)| cut.map_or(true, |c| **idx <= c))
         .map(|(idx, h)| {
             let n = h.rtts.len() as f64;
             let (mut best, mut worst, mut sum, mut sq) = (f64::MAX, 0.0f64, 0.0, 0.0);
@@ -1075,6 +1094,9 @@ fn parse_iperf3_json(text: &str, direction: &str) -> (Option<f64>, Option<u32>, 
 
 /// Streams a live MTR table: parses `mtr --raw` lines as they arrive and sends
 /// progressive snapshots (done=false, throttled) plus one terminal snapshot.
+/// The run ends as soon as the *target* hop has been probed `cycles` times —
+/// mtr's own -c counts discovery rounds, so a slowly-discovered target would
+/// otherwise see far fewer probes than requested.
 async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Option<u32>) {
     let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
         request_id: request_id.clone(),
@@ -1083,7 +1105,19 @@ async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Opt
         done: true,
         exit_code: Some(exit_code),
     };
-    let Some(mut cmd) = task_command(TaskKind::Mtr, target, cycles) else {
+    let wanted = cycles.unwrap_or(10).clamp(1, 30);
+    // Resolve now so the target hop can be recognized by its h-line address.
+    let target_ips: Vec<std::net::IpAddr> = match target.parse() {
+        Ok(ip) => vec![ip],
+        Err(_) => tokio::net::lookup_host((target, 0))
+            .await
+            .map(|v| v.map(|s| s.ip()).collect())
+            .unwrap_or_default(),
+    };
+    // Headroom for TTL ramp-up: up to 30 hops of discovery, then `wanted`
+    // probes on the target. The early kill below is what normally ends the run.
+    let mtr_cycles = wanted + 30;
+    let Some(mut cmd) = task_command(TaskKind::Mtr, target, Some(mtr_cycles)) else {
         let _ = msg_tx.send(finish("mtr is not supported on Windows agents".into(), -1));
         return;
     };
@@ -1110,7 +1144,7 @@ async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Opt
     let mut hops = std::collections::BTreeMap::new();
     let mut dirty = false;
     let mut last_push = Instant::now() - Duration::from_secs(1);
-    let max_secs = cycles.unwrap_or(10).clamp(1, 30) as u64 * 3 + 60;
+    let max_secs = wanted as u64 * 3 + 120;
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     let mut timed_out = false;
     loop {
@@ -1121,11 +1155,21 @@ async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Opt
                 if dirty && last_push.elapsed() >= Duration::from_millis(300) {
                     let _ = msg_tx.send(AgentMsg::MtrResult {
                         request_id: request_id.clone(),
-                        hubs: raw_hops_snapshot(&hops),
+                        hubs: raw_hops_snapshot(&hops, &target_ips),
                         done: false,
                     });
                     dirty = false;
                     last_push = Instant::now();
+                }
+                let target_done = !target_ips.is_empty()
+                    && hops
+                        .values()
+                        .find(|h| target_ips.iter().any(|ip| ip.to_string() == h.ip))
+                        .map(|h| h.rtts.len() as u32 >= wanted)
+                        .unwrap_or(false);
+                if target_done {
+                    let _ = child.kill().await;
+                    break;
                 }
             }
             Ok(Ok(None)) => break,
@@ -1149,7 +1193,7 @@ async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Opt
     }
     let _ = msg_tx.send(AgentMsg::MtrResult {
         request_id,
-        hubs: raw_hops_snapshot(&hops),
+        hubs: raw_hops_snapshot(&hops, &target_ips),
         done: true,
     });
 }
