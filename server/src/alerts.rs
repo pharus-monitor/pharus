@@ -343,6 +343,7 @@ fn load_rules(state: &SharedState) -> Result<Vec<AlertRuleRow>> {
 
 #[derive(Clone, Copy)]
 struct CompactTaskResult {
+    #[allow(dead_code)]
     ts: i64,
     exit_code: i32,
 }

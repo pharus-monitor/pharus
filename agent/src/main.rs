@@ -823,7 +823,7 @@ fn raw_hops_snapshot(
     };
     hops
         .iter()
-        .take_while(|(idx, _)| cut.map_or(true, |c| **idx <= c))
+        .take_while(|(idx, _)| cut.is_none_or(|c| **idx <= c))
         .map(|(idx, h)| {
             let n = h.rtts.len() as f64;
             let (mut best, mut worst, mut sum, mut sq) = (f64::MAX, 0.0f64, 0.0, 0.0);

@@ -60,6 +60,7 @@ pub fn valid_target(target: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_' | '[' | ']'))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     state: &SharedState,
     agent_id: i64,
@@ -153,6 +154,7 @@ pub fn start_mtr(
 
 /// iperf3 params are carried in `extra`; the server host still goes through
 /// the same argv-only `target` path so no shell injection is possible.
+#[allow(clippy::too_many_arguments)]
 pub fn start_iperf3(
     state: &SharedState,
     agent_id: i64,
