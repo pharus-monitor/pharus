@@ -229,6 +229,7 @@
   "billing.cycle.quarterly": "ежеквартально",
   "billing.cycle.yearly": "ежегодно",
   "admin.manage": "Режим управления",
+  "admin.logout": "Выйти",
   "admin.login": "Режим управления",
   "admin.token": "Токен администратора",
   "admin.submit": "ОК",

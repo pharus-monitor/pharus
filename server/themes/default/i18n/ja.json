@@ -229,6 +229,7 @@
   "billing.cycle.quarterly": "3か月払い",
   "billing.cycle.yearly": "年払い",
   "admin.manage": "管理モード",
+  "admin.logout": "ログアウト",
   "admin.login": "管理モード",
   "admin.token": "管理者トークン",
   "admin.submit": "決定",

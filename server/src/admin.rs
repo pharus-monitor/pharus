@@ -87,7 +87,10 @@ pub fn router(state: SharedState) -> Router<SharedState> {
 }
 
 #[derive(Clone)]
-struct AdminSession(String);
+struct AdminSession {
+    username: String,
+    token: String,
+}
 
 const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 
@@ -120,14 +123,17 @@ fn set_session_cookie(response: &mut Response, token: &str, secure: bool) {
         .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
 }
 
+/// Expire the cookie. Both a plain and a `Secure` variant are sent so the
+/// session is cleared regardless of whether it was originally set over TLS
+/// (browsers treat `Secure` and non-`Secure` cookies as distinct).
 fn clear_session_cookie(response: &mut Response, secure: bool) {
-    let mut cookie = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    let base = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    let headers = response.headers_mut();
+    headers.append(axum::http::header::SET_COOKIE, base.parse().unwrap());
     if secure {
-        cookie.push_str("; Secure");
+        let secure_cookie = format!("{base}; Secure");
+        headers.append(axum::http::header::SET_COOKIE, secure_cookie.parse().unwrap());
     }
-    response
-        .headers_mut()
-        .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
 }
 
 /// Prefer the HttpOnly cookie, fall back to a Bearer token for programmatic
@@ -167,7 +173,8 @@ async fn require_admin(State(state): State<SharedState>, mut req: Request, next:
         }
         username.clone()
     };
-    req.extensions_mut().insert(AdminSession(username));
+    req.extensions_mut()
+        .insert(AdminSession { username, token });
     next.run(req).await
 }
 
@@ -227,11 +234,13 @@ async fn login(State(state): State<SharedState>, req: Request) -> Response {
         return err(StatusCode::UNAUTHORIZED, "invalid credentials");
     }
     let token = uuid::Uuid::new_v4().simple().to_string();
-    state
-        .sessions
-        .lock()
-        .unwrap()
-        .insert(token.clone(), (body.username.clone(), std::time::Instant::now()));
+    {
+        let mut sessions = state.sessions.lock().unwrap();
+        // Bound the session map: drop entries past their TTL on each login so
+        // sessions that are never logged out or re-visited don't accumulate.
+        sessions.retain(|_, (_, created)| created.elapsed() <= SESSION_TTL);
+        sessions.insert(token.clone(), (body.username.clone(), std::time::Instant::now()));
+    }
     let mut response = Json(serde_json::json!({ "token": token })).into_response();
     set_session_cookie(&mut response, &token, secure);
     response
@@ -258,7 +267,7 @@ async fn update_password(
     Extension(session): Extension<AdminSession>,
     Json(body): Json<PasswordBody>,
 ) -> Response {
-    let username = session.0;
+    let username = session.username;
     let hash = {
         let conn = state.db.lock().unwrap();
         match db::find_user(&conn, &username) {
@@ -282,6 +291,12 @@ async fn update_password(
         if let Err(e) = db::update_user_password(&conn, &username, &new_hash) {
             return db_err(e);
         }
+    }
+    // Password changed: kill this user's other sessions (the current one stays
+    // valid, it just proved the old password).
+    {
+        let mut sessions = state.sessions.lock().unwrap();
+        sessions.retain(|tok, (user, _)| user != &username || tok == &session.token);
     }
     StatusCode::OK.into_response()
 }

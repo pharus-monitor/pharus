@@ -229,6 +229,7 @@
   "billing.cycle.quarterly": "quarterly",
   "billing.cycle.yearly": "yearly",
   "admin.manage": "Admin mode",
+  "admin.logout": "Log out",
   "admin.login": "Admin mode",
   "admin.token": "Admin token",
   "admin.submit": "Confirm",

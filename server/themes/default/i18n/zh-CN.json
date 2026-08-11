@@ -229,6 +229,7 @@
   "billing.cycle.quarterly": "季付",
   "billing.cycle.yearly": "年付",
   "admin.manage": "管理模式",
+  "admin.logout": "退出登录",
   "admin.login": "管理模式",
   "admin.token": "管理 Token",
   "admin.submit": "确定",

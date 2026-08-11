@@ -35,6 +35,7 @@
       <div class="header-right">
         <a class="nav-back" href="index.html" data-i18n="nav.hosts">← 主机列表</a>
         <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
+        <button id="logout-btn" class="view-toggle" type="button" hidden data-i18n="admin.logout">退出登录</button>
         <span id="conn" class="conn-badge conn-down" role="status">
           <span class="conn-dot"></span>Connecting…
         </span>
@@ -128,6 +129,7 @@
       var loginPassword = document.getElementById('login-password');
       var loginErr = document.getElementById('login-err');
       var loginSubmit = document.getElementById('login-submit');
+      var logoutBtn = document.getElementById('logout-btn');
       var adminController = null;
       var agentsMap = new Map();
 
@@ -171,6 +173,7 @@
 
       function enterAdmin() {
         document.body.classList.add('is-admin');
+        logoutBtn.hidden = false;
         loginView.hidden = true;
         adminRoot.hidden = false;
         if (!adminController) {
@@ -195,6 +198,7 @@
       function logout() {
         fetch('/api/admin/logout', { method: 'POST' }).catch(function () {});
         document.body.classList.remove('is-admin');
+        logoutBtn.hidden = true;
         if (adminController) { adminController.setVisible(false); }
         adminRoot.hidden = true;
         loginUsername.value = '';
@@ -265,6 +269,7 @@
       }
       loginUsername.addEventListener('keydown', loginKey);
       loginPassword.addEventListener('keydown', loginKey);
+      logoutBtn.addEventListener('click', logout);
       document.addEventListener('keydown', function (ev) {
         if (ev.key === 'Escape') {
           document.getElementById('entity-modal').hidden = true;
