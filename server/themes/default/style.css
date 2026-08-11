@@ -370,11 +370,12 @@ body.is-dragging { user-select: none; -webkit-user-select: none; }
 .panel-head-inline { align-items: flex-end; }
 .panel-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
 .diag-controls { grid-template-columns: minmax(8rem, 0.8fr) minmax(10rem, 1.5fr) minmax(5.5rem, 0.45fr); }
-.diag-tabs { display: inline-flex; gap: 2px; padding: 3px; margin-top: 0.7rem; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--abyss-850); }
-.diag-tab { padding: 4px 13px; border-radius: 999px; border: none; background: none; color: var(--text-muted); font: inherit; font-size: 11px; cursor: pointer; transition: color 0.2s, background 0.2s; white-space: nowrap; }
+#diag-panel .panel-head { margin-bottom: 0.5rem; }
+.diag-tabs { display: inline-flex; gap: 2px; padding: 3px; margin: 0 0 1rem; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-surface); }
+.diag-tab { padding: 4px 13px; border-radius: 999px; border: none; background: none; color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; transition: color 0.2s, background 0.2s; white-space: nowrap; }
 .diag-tab:hover { color: var(--text-primary); }
-.diag-tab.active { color: var(--beacon-400); background: rgba(251, 191, 36, 0.12); }
-.iperf3-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem 0.6rem; margin-top: 0.7rem; align-items: end; }
+.diag-tab.active { color: var(--accent); background: rgba(251, 191, 36, 0.14); }
+.iperf3-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem 0.6rem; margin-top: 0; align-items: end; }
 .iperf3-controls .btn { grid-column: 1 / -1; justify-self: start; margin-top: 0.15rem; }
 .field.compact { margin: 0; }
 .field.compact span { white-space: nowrap; }

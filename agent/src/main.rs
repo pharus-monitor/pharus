@@ -831,7 +831,8 @@ fn raw_hops_snapshot(
 }
 
 /// Mask the first hop of traceroute output: ` 1  gateway (1.2.3.4)  0.4 ms …`
-/// keeps the hop number and timings but hides the gateway address.
+/// keeps the hop number and timings but hides the gateway address. Windows
+/// tracert prints timings as `<1 ms`, so `<…` tokens stay visible too.
 fn mask_traceroute_hop1(line: &str) -> String {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("1 ") {
@@ -839,7 +840,8 @@ fn mask_traceroute_hop1(line: &str) -> String {
     }
     let mut out = String::from(" 1 ");
     for tok in trimmed.split_whitespace().skip(1) {
-        let visible = tok == "*" || tok == "ms" || tok.parse::<f64>().is_ok();
+        let visible =
+            tok == "*" || tok == "ms" || tok.starts_with('<') || tok.parse::<f64>().is_ok();
         out.push_str(if visible { tok } else { "***" });
         out.push(' ');
     }
@@ -1130,16 +1132,17 @@ async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Opt
         }
     };
     let stderr_buf = Arc::new(Mutex::new(String::new()));
+    let mut stderr_task = None;
     if let Some(err) = child.stderr.take() {
         let shared = stderr_buf.clone();
-        tokio::spawn(async move {
+        stderr_task = Some(tokio::spawn(async move {
             let mut r = BufReader::new(err);
             let mut tmp = String::new();
             let _ = tokio::io::AsyncReadExt::read_to_string(&mut r, &mut tmp).await;
             // keep the tail small; surfaced only when no hops parsed
             let start = tmp.len().saturating_sub(4096);
             shared.lock().unwrap().push_str(&tmp[start..]);
-        });
+        }));
     }
     let mut hops = std::collections::BTreeMap::new();
     let mut dirty = false;
@@ -1186,6 +1189,10 @@ async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Opt
         _ => -1,
     };
     if hops.is_empty() {
+        // make sure the stderr pump had its last scheduling slice
+        if let Some(t) = stderr_task {
+            let _ = tokio::time::timeout(Duration::from_secs(2), t).await;
+        }
         let stderr = stderr_buf.lock().unwrap().clone();
         let detail = if timed_out { "mtr timed out\n".to_string() } else { stderr };
         let _ = msg_tx.send(finish(detail, exit_code));

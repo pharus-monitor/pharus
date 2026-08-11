@@ -90,7 +90,7 @@
   "diag.state.failed": "Failed",
   "diag.state.finished": "Finished",
   "diag.state.running": "Running",
-  "diag.subtitle": "Streamed Looking Glass and MTR output",
+  "diag.subtitle": "Streamed Looking Glass, bandwidth test and MTR output",
   "diag.target": "Target",
   "diag.targetPlaceholder": "example.com / 1.1.1.1",
   "diag.targetRequired": "Enter a target",
