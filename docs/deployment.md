@@ -81,7 +81,31 @@ systemctl status pharus-server
 
 The service listens on `0.0.0.0:8080` by default. Edit `PHARUS_ADDR` in the unit file to change the port.
 
-**5. Open the firewall**
+**5. Enable the admin console (recommended)**
+
+Billing, ping probe tasks, custom script tasks, alert rules, notification
+channels, regions and feature toggles are all configured in the admin console
+(`admin.html`), which uses username/password login. Set the credentials via
+environment:
+
+```bash
+sudo systemctl edit pharus-server
+```
+
+Add:
+
+```ini
+[Service]
+Environment=PHARUS_ADMIN_USER=admin
+Environment=PHARUS_ADMIN_PASSWORD=use-a-strong-password
+```
+
+Then `sudo systemctl restart pharus-server` and sign in at
+`https://<your-domain>/admin.html`. Without `PHARUS_ADMIN_PASSWORD` the admin
+API stays disabled and the dashboard is read-only. With Docker, add the same
+two variables to the service's `environment` in `docker-compose.yml`.
+
+**6. Open the firewall**
 
 ```bash
 # UFW
@@ -200,8 +224,9 @@ interval = 3
 EOF
 sudo chmod 600 /etc/pharus/agent.toml   # token readable by root only
 
-# 3. systemd
-sudo cp deploy/pharus-agent.service /etc/systemd/system/
+# 3. systemd (the agent tarball ships no unit file; fetch it from the repo)
+sudo curl -fsSL -o /etc/systemd/system/pharus-agent.service \
+  https://raw.githubusercontent.com/pharus-monitor/pharus/main/deploy/pharus-agent.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now pharus-agent
 

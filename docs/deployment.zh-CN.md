@@ -79,7 +79,28 @@ systemctl status pharus-server
 
 服务默认监听 `0.0.0.0:8080`。改端口可编辑 unit 文件中的 `PHARUS_ADDR`。
 
-**5. 防火墙放行**
+**5. 启用管理后台（推荐）**
+
+账单、Ping 探测任务、自定义脚本任务、告警规则、通知渠道、区域与功能开关都
+在管理后台（`admin.html`）里配置。后台使用账号密码登录，先设置环境变量：
+
+```bash
+sudo systemctl edit pharus-server
+```
+
+写入：
+
+```ini
+[Service]
+Environment=PHARUS_ADMIN_USER=admin
+Environment=PHARUS_ADMIN_PASSWORD=换成一个强密码
+```
+
+然后 `sudo systemctl restart pharus-server`，访问 `https://<你的域名>/admin.html`
+登录。未设置 `PHARUS_ADMIN_PASSWORD` 时管理 API 保持关闭，面板为只读。
+Docker 方式则在 `docker-compose.yml` 的 environment 里加上面两个变量。
+
+**6. 防火墙放行**
 
 ```bash
 # UFW
@@ -198,8 +219,9 @@ interval = 3
 EOF
 sudo chmod 600 /etc/pharus/agent.toml   # token 仅 root 可读
 
-# 3. systemd
-sudo cp deploy/pharus-agent.service /etc/systemd/system/
+# 3. systemd（agent 包不含 unit 文件，从仓库获取）
+sudo curl -fsSL -o /etc/systemd/system/pharus-agent.service \
+  https://raw.githubusercontent.com/pharus-monitor/pharus/main/deploy/pharus-agent.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now pharus-agent
 
