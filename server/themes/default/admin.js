@@ -577,6 +577,9 @@
         if (ev.pointerType === 'mouse' && ev.button !== 0) return;
         ev.preventDefault();
         ev.stopPropagation();
+        // capture immediately: leaving the small grip before the 6px threshold
+        // must not lose the gesture
+        try { grip.setPointerCapture(ev.pointerId); } catch (err) {}
         var row = grip.closest('tr');
         if (!row) return;
         var startY = ev.clientY;
@@ -620,9 +623,9 @@
         }
 
         function finish(e, apply) {
-          grip.removeEventListener('pointermove', onMove);
-          grip.removeEventListener('pointerup', onUp);
-          grip.removeEventListener('pointercancel', onCancel);
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+          document.removeEventListener('pointercancel', onCancel);
           row.style.transform = '';
           row.classList.remove('dragging');
           document.body.classList.remove('is-dragging');
@@ -646,9 +649,9 @@
         function onUp(e) { finish(e, true); }
         function onCancel(e) { finish(e, false); }
 
-        grip.addEventListener('pointermove', onMove);
-        grip.addEventListener('pointerup', onUp);
-        grip.addEventListener('pointercancel', onCancel);
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+        document.addEventListener('pointercancel', onCancel);
       });
     }
 

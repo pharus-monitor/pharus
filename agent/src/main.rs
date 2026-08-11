@@ -422,7 +422,13 @@ async fn ping_scheduler(msg_tx: MsgTx, shared: Arc<Shared>, http: reqwest::Clien
 
         if changed {
             let mut results = legacy.clone();
-            results.extend(task_results.values().cloned());
+            // report in the server's task-list order (which carries the
+            // operator's drag ordering); HashMap values() would be arbitrary
+            for spec in &specs {
+                if let Some(r) = task_results.get(&spec.id) {
+                    results.push(r.clone());
+                }
+            }
             if msg_tx.send(AgentMsg::Ping { results }).is_err() {
                 return;
             }
