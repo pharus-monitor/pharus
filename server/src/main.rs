@@ -204,6 +204,8 @@ async fn serve(
         login_failures: Mutex::new(HashMap::new()),
         task_waiters: Mutex::new(HashMap::new()),
         diag_pending: Mutex::new(HashMap::new()),
+        diag_by_ip: Mutex::new(HashMap::new()),
+        iperf3_by_agent: Mutex::new(HashMap::new()),
     });
 
     alerts::spawn(state.clone());

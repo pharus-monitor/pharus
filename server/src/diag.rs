@@ -5,9 +5,10 @@
 //! every browser as `BrowserMsg::DiagResult`, correlated by `request_id`.
 
 use crate::features;
+use crate::regions;
 use crate::state::SharedState;
 use pharus_common::{BrowserMsg, MtrHop, ServerToAgentMsg, TaskKind};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 /// A request whose output frames have not finished arriving yet.
@@ -32,6 +33,10 @@ const MAX_IN_FLIGHT_TOTAL: usize = 64;
 /// The agent caps its own output, but a compromised agent is exactly the case
 /// this guards against, so the server counts the bytes itself.
 const MAX_RELAY_BYTES: usize = 256 * 1024;
+/// Time-based anti-abuse budgets. Values are configurable via the settings of
+/// the same name; these are the fallbacks.
+const DIAG_PER_IP_MINUTE_DEFAULT: usize = 12;
+const IPERF3_PER_AGENT_HOUR_DEFAULT: usize = 10;
 
 #[derive(Debug)]
 pub enum DiagError {
@@ -39,6 +44,7 @@ pub enum DiagError {
     AgentOffline,
     BadTarget,
     TooManyRequests,
+    RateLimited,
 }
 
 fn now() -> i64 {
@@ -46,6 +52,52 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn setting_usize(state: &SharedState, key: &str, default: usize) -> usize {
+    let conn = state.db.lock().unwrap();
+    crate::db::get_setting(&conn, key)
+        .ok()
+        .flatten()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+/// Sliding per-client request budget across all diagnostic kinds, so one
+/// visitor cannot spam `ping`/`mtr`/`iperf3` on every agent.
+pub fn check_ip_budget(state: &SharedState, ip: &str) -> Result<(), DiagError> {
+    let limit = setting_usize(state, "diag_per_ip_minute", DIAG_PER_IP_MINUTE_DEFAULT);
+    let mut map = state.diag_by_ip.lock().unwrap();
+    let cutoff = Instant::now() - Duration::from_secs(60);
+    map.retain(|_, v| {
+        v.retain(|t| *t > cutoff);
+        !v.is_empty()
+    });
+    let bucket = map.entry(ip.to_string()).or_default();
+    if bucket.len() >= limit {
+        return Err(DiagError::RateLimited);
+    }
+    bucket.push(Instant::now());
+    Ok(())
+}
+
+/// Sliding hourly budget of iperf3 runs per agent. iperf3 burns the machine's
+/// bandwidth, so this is the backstop against an attacker rotating IPs to keep
+/// hammering a single host regardless of where the request comes from.
+pub fn check_iperf3_agent_budget(state: &SharedState, agent_id: i64) -> Result<(), DiagError> {
+    let limit = setting_usize(state, "iperf3_per_agent_hour", IPERF3_PER_AGENT_HOUR_DEFAULT);
+    let mut map = state.iperf3_by_agent.lock().unwrap();
+    let cutoff = Instant::now() - Duration::from_secs(3600);
+    map.retain(|_, v| {
+        v.retain(|t| *t > cutoff);
+        !v.is_empty()
+    });
+    let bucket = map.entry(agent_id).or_default();
+    if bucket.len() >= limit {
+        return Err(DiagError::RateLimited);
+    }
+    bucket.push(Instant::now());
+    Ok(())
 }
 
 /// The target is passed to `ping`/`traceroute`/`mtr` as an argv entry, so shell
@@ -63,6 +115,7 @@ pub fn valid_target(target: &str) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn dispatch(
     state: &SharedState,
+    ip: &str,
     agent_id: i64,
     feature: &str,
     kind: &str,
@@ -78,6 +131,12 @@ fn dispatch(
     // that matters is this one.
     if !features::enabled(state, agent_id, feature) {
         return Err(DiagError::FeatureDisabled);
+    }
+    // Time-based anti-abuse budgets (per-visitor rate + per-machine iperf3
+    // hourly cap). Enforced before any request id is minted.
+    check_ip_budget(state, ip)?;
+    if feature == "iperf3" {
+        check_iperf3_agent_budget(state, agent_id)?;
     }
 
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -130,6 +189,7 @@ fn dispatch(
 
 pub fn start_lg(
     state: &SharedState,
+    ip: &str,
     agent_id: i64,
     kind: &str,
     target: &str,
@@ -139,17 +199,18 @@ pub fn start_lg(
         "traceroute" => TaskKind::Traceroute,
         _ => return Err(DiagError::BadTarget),
     };
-    dispatch(state, agent_id, "lg", kind, task_kind, target, None, None)
+    dispatch(state, ip, agent_id, "lg", kind, task_kind, target, None, None)
 }
 
 pub fn start_mtr(
     state: &SharedState,
+    ip: &str,
     agent_id: i64,
     target: &str,
     cycles: Option<u32>,
 ) -> Result<String, DiagError> {
     let cycles = cycles.map(|c| c.clamp(1, 30));
-    dispatch(state, agent_id, "mtr", "mtr", TaskKind::Mtr, target, cycles, None)
+    dispatch(state, ip, agent_id, "mtr", "mtr", TaskKind::Mtr, target, cycles, None)
 }
 
 /// iperf3 params are carried in `extra`; the server host still goes through
@@ -157,6 +218,7 @@ pub fn start_mtr(
 #[allow(clippy::too_many_arguments)]
 pub fn start_iperf3(
     state: &SharedState,
+    ip: &str,
     agent_id: i64,
     server: &str,
     port: u16,
@@ -174,8 +236,9 @@ pub fn start_iperf3(
         "protocol": protocol,
         "length": length,
     });
-    dispatch(
+    let request_id = dispatch(
         state,
+        ip,
         agent_id,
         "iperf3",
         "iperf3",
@@ -183,7 +246,117 @@ pub fn start_iperf3(
         server,
         None,
         Some(extra),
-    )
+    )?;
+    log_iperf3(state, ip, agent_id, server);
+    Ok(request_id)
+}
+
+/// Best-effort country + ASN lookup for a target IP, trying several free
+/// sources in order until one yields data. `None` on total failure so logging
+/// never blocks or depends on any single source.
+async fn geo_lookup(ip: &str) -> Option<(Option<String>, Option<String>)> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(6))
+        .build()
+        .ok()?;
+    if let Some(found) = geo_ipinfo(&client, ip).await {
+        return Some(found);
+    }
+    if let Some(found) = geo_ipwhois(&client, ip).await {
+        return Some(found);
+    }
+    geo_ipapi(&client, ip).await
+}
+
+async fn geo_ipinfo(client: &reqwest::Client, ip: &str) -> Option<(Option<String>, Option<String>)> {
+    let url = format!("https://ipinfo.io/{ip}/json");
+    let resp = client.get(&url).send().await.ok()?;
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let region = json
+        .get("country")
+        .and_then(serde_json::Value::as_str)
+        .map(regions::region_name)
+        .map(str::to_string);
+    let asn = json
+        .get("org")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    (region.is_some() || asn.is_some()).then(|| (region, asn))
+}
+
+async fn geo_ipwhois(client: &reqwest::Client, ip: &str) -> Option<(Option<String>, Option<String>)> {
+    let url = format!("https://ipwhois.app/json/{ip}");
+    let resp = client.get(&url).send().await.ok()?;
+    let json: serde_json::Value = resp.json().await.ok()?;
+    if json.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
+        return None;
+    }
+    let region = json
+        .get("country_code")
+        .and_then(serde_json::Value::as_str)
+        .map(regions::region_name)
+        .map(str::to_string);
+    let asn = json
+        .get("as")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            json.get("connection")
+                .and_then(|c| c.get("asn"))
+                .and_then(serde_json::Value::as_u64)
+                .map(|n| format!("AS{n}"))
+        });
+    (region.is_some() || asn.is_some()).then(|| (region, asn))
+}
+
+async fn geo_ipapi(client: &reqwest::Client, ip: &str) -> Option<(Option<String>, Option<String>)> {
+    let url = format!("http://ip-api.com/json/{ip}?fields=status,countryCode,as");
+    let resp = client.get(&url).send().await.ok()?;
+    let json: serde_json::Value = resp.json().await.ok()?;
+    if json.get("status").and_then(serde_json::Value::as_str) != Some("success") {
+        return None;
+    }
+    let region = json
+        .get("countryCode")
+        .and_then(serde_json::Value::as_str)
+        .map(regions::region_name)
+        .map(str::to_string);
+    let asn = json
+        .get("as")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    (region.is_some() || asn.is_some()).then(|| (region, asn))
+}
+
+/// Persist an accepted iperf3 run (requester IP + target), then enrich it with
+/// the target's region/ASN in the background so the geo lookup never delays the
+/// dispatch.
+fn log_iperf3(state: &SharedState, client_ip: &str, agent_id: i64, target: &str) {
+    let id = {
+        let conn = match state.db.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        match crate::db::insert_iperf3_log(&conn, agent_id, client_ip, target, now()) {
+            Ok(id) => id,
+            Err(e) => {
+                warn!(error = %e, "iperf3 log insert failed");
+                return;
+            }
+        }
+    };
+    let state = state.clone();
+    let target = target.to_string();
+    tokio::spawn(async move {
+        let Some((region, asn)) = geo_lookup(&target).await else { return };
+        if let Ok(conn) = state.db.lock() {
+            if let Err(e) =
+                crate::db::update_iperf3_log(&conn, id, region.as_deref(), asn.as_deref())
+            {
+                warn!(error = %e, "iperf3 log enrich failed");
+            }
+        }
+    });
 }
 
 fn take_pending(state: &SharedState, request_id: &str, agent_id: i64, done: bool) -> Option<String> {

@@ -73,6 +73,12 @@ pub struct AppState {
     pub task_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<pharus_common::AgentMsg>>>,
     /// In-flight browser-initiated diagnostics keyed by request_id.
     pub diag_pending: Mutex<HashMap<String, crate::diag::DiagPending>>,
+    /// Rolling timestamps of accepted diagnostic requests, per client IP, for
+    /// a per-visitor request budget.
+    pub diag_by_ip: Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    /// Rolling timestamps of dispatched iperf3 runs, per agent, for an hourly
+    /// per-machine budget (the backstop against IP-rotating abuse).
+    pub iperf3_by_agent: Mutex<HashMap<i64, Vec<std::time::Instant>>>,
 }
 
 #[derive(Debug, Clone, Copy)]

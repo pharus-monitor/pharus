@@ -64,11 +64,12 @@ pub fn router(state: SharedState) -> Router<SharedState> {
             put(update_channel).delete(delete_channel),
         )
         .route("/api/admin/channels/:id/test", post(test_channel))
-        .route("/api/admin/settings", put(update_setting))
+        .route("/api/admin/settings", get(read_settings).put(update_setting))
         .route(
             "/api/admin/agent-secrets",
             get(list_agent_secrets).put(save_agent_secrets),
         )
+        .route("/api/admin/iperf3-log", get(iperf3_log))
         .route("/api/admin/password", put(update_password))
         .route("/api/admin/themes", get(list_themes).post(upload_theme))
         .route(
@@ -213,27 +214,6 @@ pub struct LoginBody {
 const MAX_LOGIN_FAILURES: u32 = 10;
 const LOGIN_WINDOW: Duration = Duration::from_secs(300);
 
-fn client_ip(req: &Request) -> String {
-    if let Some(xff) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Some(first) = xff
-            .split(',')
-            .next()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            return first.to_string();
-        }
-    }
-    req.extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|ci| ci.0.ip().to_string())
-        .unwrap_or_else(|| "unknown".into())
-}
-
 fn login_attempt_blocked(state: &SharedState, ip: &str) -> bool {
     let mut throttles = state.login_failures.lock().unwrap();
     throttles.retain(|_, t| t.window_start.elapsed() <= LOGIN_WINDOW);
@@ -266,7 +246,7 @@ fn clear_login_failures(state: &SharedState, ip: &str) {
 }
 
 async fn login(State(state): State<SharedState>, req: Request) -> Response {
-    let ip = client_ip(&req);
+    let ip = crate::api::client_ip(&state, &req);
     if login_attempt_blocked(&state, &ip) {
         return err(
             StatusCode::TOO_MANY_REQUESTS,
@@ -374,6 +354,15 @@ pub struct SettingUpdate {
     pub value: String,
 }
 
+async fn read_settings(State(state): State<SharedState>) -> Response {
+    let conn = state.db.lock().unwrap();
+    let get = |key: &str| db::get_setting(&conn, key).ok().flatten();
+    Json(serde_json::json!({
+        "trusted_proxies": get("trusted_proxies").unwrap_or_default(),
+    }))
+    .into_response()
+}
+
 async fn update_setting(
     State(state): State<SharedState>,
     Json(body): Json<SettingUpdate>,
@@ -402,6 +391,14 @@ async fn update_setting(
             }
         }
         "site_name" | "site_url" => {}
+        "trusted_proxies" => {
+            for spec in body.value.split(',') {
+                let spec = spec.trim();
+                if !spec.is_empty() && !crate::api::is_valid_proxy_spec(spec) {
+                    return bad("trusted_proxies must be a comma-separated list of IPs or CIDRs");
+                }
+            }
+        }
         _ => return bad("unknown setting key"),
     }
     {
@@ -593,10 +590,13 @@ async fn update_region(
 
 async fn global_features(State(state): State<SharedState>) -> Response {
     let conn = state.db.lock().unwrap();
+    let setting = |key: &str| db::get_setting(&conn, key).ok().flatten();
     match features::global_defaults(&conn) {
         Ok(m) => Json(serde_json::json!({
             "features": m,
             "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold_global(&conn).ok().flatten(),
+            "diag_per_ip_minute": setting("diag_per_ip_minute"),
+            "iperf3_per_agent_hour": setting("iperf3_per_agent_hour"),
         }))
         .into_response(),
         Err(e) => db_err(e),
@@ -609,6 +609,10 @@ struct GlobalFeaturesBody {
     features: HashMap<String, bool>,
     #[serde(default)]
     iperf3_traffic_disable_pct: Option<f64>,
+    #[serde(default)]
+    diag_per_ip_minute: Option<usize>,
+    #[serde(default)]
+    iperf3_per_agent_hour: Option<usize>,
 }
 
 async fn set_global_features(
@@ -623,6 +627,11 @@ async fn set_global_features(
             return bad("iperf3_traffic_disable_pct must be within 0..=100");
         }
     }
+    if body.diag_per_ip_minute.is_some_and(|v| v == 0)
+        || body.iperf3_per_agent_hour.is_some_and(|v| v == 0)
+    {
+        return bad("diag limits must be positive integers");
+    }
     {
         let conn = state.db.lock().unwrap();
         for (k, v) in &body.features {
@@ -633,13 +642,28 @@ async fn set_global_features(
         if let Err(e) = features::set_iperf3_traffic_global(&conn, body.iperf3_traffic_disable_pct) {
             return db_err(e);
         }
+        for (key, val) in [
+            ("diag_per_ip_minute", body.diag_per_ip_minute),
+            ("iperf3_per_agent_hour", body.iperf3_per_agent_hour),
+        ] {
+            if let Some(v) = val {
+                if let Err(e) = db::set_setting(&conn, key, &v.to_string()) {
+                    return db_err(e);
+                }
+            } else if let Err(e) = db::clear_setting(&conn, key) {
+                return db_err(e);
+            }
+        }
     }
     features::refresh_all(&state);
     let conn = state.db.lock().unwrap();
+    let setting = |key: &str| db::get_setting(&conn, key).ok().flatten();
     match features::global_defaults(&conn) {
         Ok(m) => Json(serde_json::json!({
             "features": m,
             "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold_global(&conn).ok().flatten(),
+            "diag_per_ip_minute": setting("diag_per_ip_minute"),
+            "iperf3_per_agent_hour": setting("iperf3_per_agent_hour"),
         }))
         .into_response(),
         Err(e) => db_err(e),
@@ -1628,6 +1652,46 @@ async fn delete_theme(State(state): State<SharedState>, Path(id): Path<String>) 
     }
     match db::delete_theme(&conn, &id) {
         Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => db_err(e),
+    }
+}
+
+// ---------------------------------------------------------------- iperf3 log
+
+#[derive(Debug, Deserialize)]
+struct Iperf3LogQuery {
+    limit: Option<i64>,
+}
+
+async fn iperf3_log(
+    State(state): State<SharedState>,
+    Query(q): Query<Iperf3LogQuery>,
+) -> Response {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let conn = state.db.lock().unwrap();
+    let names = match db::list_agents(&conn) {
+        Ok(agents) => agents.into_iter().collect::<HashMap<_, _>>(),
+        Err(_) => HashMap::new(),
+    };
+    match db::list_iperf3_log(&conn, limit) {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "agent_id": r.agent_id,
+                        "agent": names.get(&r.agent_id).cloned()
+                            .unwrap_or_else(|| format!("Agent #{}", r.agent_id)),
+                        "client_ip": r.client_ip,
+                        "target": r.target,
+                        "region": r.region,
+                        "asn": r.asn,
+                        "ts": r.ts,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
         Err(e) => db_err(e),
     }
 }

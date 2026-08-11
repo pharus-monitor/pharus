@@ -822,11 +822,13 @@
       Promise.all([options.request('/api/admin/features'), loadAgents()]).then(function (values) {
         var defaults = (values[0] && values[0].features) || {};
         var globalPct = (values[0] && values[0].iperf3_traffic_disable_pct) || '';
+        var diagPerIp = (values[0] && values[0].diag_per_ip_minute) || '';
+        var iperfHour = (values[0] && values[0].iperf3_per_agent_hour) || '';
         return Promise.all(adminAgents.map(function (agent) {
           return options.request('/api/admin/agents/' + agent.agent_id + '/features').then(function (detail) {
             return { agent: agent, detail: detail || {} };
           });
-        })).then(function (details) { return { defaults: defaults, globalPct: globalPct, details: details }; });
+        })).then(function (details) { return { defaults: defaults, globalPct: globalPct, diagPerIp: diagPerIp, iperfHour: iperfHour, details: details }; });
       }).then(function (data) {
         if (!active || currentView !== 'features') return;
         options.content.innerHTML = '';
@@ -841,11 +843,19 @@
         });
         var globalPctField = inputField('feature.iperf3TrafficPct', data.globalPct, { type: 'number', min: 1, max: 100 });
         defaultsRoot.appendChild(globalPctField.el);
+        var diagPerIpField = inputField('feature.diagPerIpMinute', data.diagPerIp, { type: 'number', min: 1, placeholder: '12' });
+        defaultsRoot.appendChild(diagPerIpField.el);
+        var iperfHourField = inputField('feature.iperf3PerAgentHour', data.iperfHour, { type: 'number', min: 1, placeholder: '10' });
+        defaultsRoot.appendChild(iperfHourField.el);
         var saveDefaults = actionButton(t('admin.save'), function () {
           var body = { features: {} };
           FEATURE_NAMES.forEach(function (feature) { body.features[feature] = defaultInputs[feature].checked; });
           var pct = globalPctField.input.value.trim();
           body.iperf3_traffic_disable_pct = pct === '' ? null : Number(pct);
+          var dpi = diagPerIpField.input.value.trim();
+          body.diag_per_ip_minute = dpi === '' ? null : Number(dpi);
+          var ih = iperfHourField.input.value.trim();
+          body.iperf3_per_agent_hour = ih === '' ? null : Number(ih);
           saveDefaults.disabled = true;
           defaultStatus.textContent = t('common.saving');
           options.request('/api/admin/features', {
@@ -1045,7 +1055,9 @@
     /* ---------- Site settings (site identity, agent secrets, language) ---------- */
     function renderSettings() {
       setLoading(); clearError();
-      options.request('/api/meta').then(function (meta) {
+      Promise.all([options.request('/api/meta'), options.request('/api/admin/settings')]).then(function (values) {
+        var meta = values[0] || {};
+        var settings = values[1] || {};
         if (!active || currentView !== 'settings') return;
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('admin.settings'), null));
@@ -1058,8 +1070,10 @@
           { value: 'ja', label: '日本語' },
           { value: 'ru', label: 'Русский' }
         ], meta.default_language || 'en');
+        var proxies = inputField('settings.trustedProxies', settings.trusted_proxies || '', { type: 'text', placeholder: '173.245.48.0/20, 103.21.244.0/22, …' });
         box.appendChild(name.el);
         box.appendChild(lang.el);
+        box.appendChild(proxies.el);
         var status = node('span', 'inline-status');
         var save = actionButton(t('admin.save'), function () {
           function put(key, value) {
@@ -1071,7 +1085,8 @@
           }
           var puts = [
             put('site_name', name.input.value.trim()),
-            put('default_language', lang.input.value)
+            put('default_language', lang.input.value),
+            put('trusted_proxies', proxies.input.value.trim())
           ];
           save.disabled = true;
           status.textContent = t('common.saving');
@@ -1283,6 +1298,35 @@
       }).catch(showError);
     }
 
+    /* ---------- iPerf3 log ---------- */
+    function renderIperf3Log() {
+      setLoading(); clearError();
+      options.request('/api/admin/iperf3-log?limit=200').then(function (rows) {
+        if (!active || currentView !== 'iperf3Log') return;
+        rows = Array.isArray(rows) ? rows : [];
+        options.content.innerHTML = '';
+        options.content.appendChild(toolbar(t('admin.iperf3Log'), null));
+        if (!rows.length) {
+          options.content.appendChild(node('p', 'admin-empty', t('common.noData')));
+          return;
+        }
+        var tableRows = rows.map(function (row) {
+          return [
+            new Date(Number(row.ts) * 1000).toLocaleString(),
+            row.agent || ('#' + row.agent_id),
+            row.client_ip,
+            row.target,
+            row.region || '—',
+            row.asn || '—'
+          ];
+        });
+        options.content.appendChild(makeTable([
+          t('common.time'), t('common.agent'), t('iperfLog.clientIp'), t('iperfLog.target'),
+          t('iperfLog.region'), t('iperfLog.asn')
+        ], tableRows));
+      }).catch(showError);
+    }
+
     function loadView() {
       if (!active) return;
       if (currentView === 'alerts') renderAlerts();
@@ -1292,6 +1336,7 @@
       else if (currentView === 'regions') renderRegions();
       else if (currentView === 'features') renderFeatures();
       else if (currentView === 'hostBilling') renderHostBilling();
+      else if (currentView === 'iperf3Log') renderIperf3Log();
       else if (currentView === 'themes') renderThemes();
       else if (currentView === 'settings') renderSettings();
     }

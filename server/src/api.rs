@@ -3,7 +3,7 @@
 use crate::state::SharedState;
 use crate::{db, diag, features, regions};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -13,6 +13,148 @@ use serde::Deserialize;
 
 pub fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
+}
+
+/// Best-effort client identifier for anti-abuse budgets and iperf3 logging.
+///
+/// A CDN or reverse proxy in front of the site makes the peer socket its own
+/// address, so the real visitor IP must come from its forwarding headers. To
+/// keep those headers from being spoofable by anyone who reaches the origin
+/// directly, they are only trusted when the peer address is in the trusted
+/// proxy list (Cloudflare ranges by default, extendable via the
+/// `trusted_proxies` setting). Otherwise the peer address itself is used.
+pub fn client_ip(state: &SharedState, req: &Request) -> String {
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    match peer {
+        Some(peer) if is_trusted_proxy(state, &peer) => {
+            forwarded_client_ip(req).unwrap_or_else(|| peer.to_string())
+        }
+        Some(peer) => peer.to_string(),
+        None => forwarded_client_ip(req).unwrap_or_else(|| "unknown".into()),
+    }
+}
+
+/// The real visitor IP as reported by the CDN/proxy forwarding headers.
+fn forwarded_client_ip(req: &Request) -> Option<String> {
+    for header in ["cf-connecting-ip", "x-real-ip", "true-client-ip"] {
+        if let Some(value) = req.headers().get(header).and_then(|v| v.to_str().ok()) {
+            let value = value.trim();
+            if value.parse::<std::net::IpAddr>().is_ok() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    if let Some(xff) = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+    {
+        for hop in xff.split(',') {
+            let hop = hop.trim();
+            if hop.parse::<std::net::IpAddr>().is_ok() {
+                return Some(hop.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Cloudflare's published edge ranges — the default trusted set. Kept in sync
+/// manually; operators can extend or fully replace it via `trusted_proxies`.
+const CLOUDFLARE_IPS: &[&str] = &[
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+    "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+];
+
+struct NetRule {
+    base: std::net::IpAddr,
+    prefix: u8,
+}
+
+fn parse_rule(spec: &str) -> Option<NetRule> {
+    let (ip, prefix) = match spec.split_once('/') {
+        Some((ip, p)) => (ip.trim(), p.trim().parse::<u8>().ok()?),
+        None => (spec.trim(), u8::MAX),
+    };
+    let ip = ip.parse::<std::net::IpAddr>().ok()?;
+    let default_prefix = match ip {
+        std::net::IpAddr::V4(_) => 32,
+        std::net::IpAddr::V6(_) => 128,
+    };
+    Some(NetRule {
+        base: ip,
+        prefix: if spec.contains('/') { prefix } else { default_prefix },
+    })
+}
+
+/// Public validation so the settings UI/API can reject a bad proxy list.
+pub fn is_valid_proxy_spec(spec: &str) -> bool {
+    parse_rule(spec).is_some()
+}
+
+fn ip_in_rule(ip: &std::net::IpAddr, rule: &NetRule) -> bool {
+    match (*ip, rule.base) {
+        (std::net::IpAddr::V4(a), std::net::IpAddr::V4(b)) => {
+            let prefix = rule.prefix.min(32);
+            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+            (u32::from(a) & mask) == (u32::from(b) & mask)
+        }
+        (std::net::IpAddr::V6(a), std::net::IpAddr::V6(b)) => {
+            let prefix = rule.prefix.min(128);
+            let (a, b) = (a.octets(), b.octets());
+            for i in 0..(prefix / 8) as usize {
+                if a[i] != b[i] {
+                    return false;
+                }
+            }
+            let bits = (prefix % 8) as usize;
+            if bits > 0 {
+                let mask = 0xFFu8 << (8 - bits);
+                if a[prefix as usize / 8] & mask != b[prefix as usize / 8] & mask {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_trusted_proxy(state: &SharedState, peer: &std::net::IpAddr) -> bool {
+    let configured = {
+        let conn = state.db.lock().unwrap();
+        crate::db::get_setting(&conn, "trusted_proxies")
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    };
+    let specs: Vec<&str> = if configured.trim().is_empty() {
+        CLOUDFLARE_IPS.to_vec()
+    } else {
+        configured.split(',').map(str::trim).filter(|s| !s.is_empty()).collect()
+    };
+    specs.iter().filter_map(|s| parse_rule(s)).any(|rule| ip_in_rule(peer, &rule))
+}
+
+async fn take_json<T: serde::de::DeserializeOwned>(
+    state: &SharedState,
+    req: Request,
+) -> Result<(String, T), Response> {
+    let ip = client_ip(state, &req);
+    let (_, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024)
+        .await
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "invalid request body"))?;
+    let parsed = serde_json::from_slice(&bytes)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "invalid request body"))?;
+    Ok((ip, parsed))
 }
 
 pub fn router() -> Router<SharedState> {
@@ -204,6 +346,9 @@ fn diag_response(result: Result<String, diag::DiagError>) -> Response {
         Err(diag::DiagError::TooManyRequests) => {
             err(StatusCode::TOO_MANY_REQUESTS, "诊断请求过于频繁，请稍后再试")
         }
+        Err(diag::DiagError::RateLimited) => {
+            err(StatusCode::TOO_MANY_REQUESTS, "请求频率超限，请稍后再试")
+        }
     }
 }
 
@@ -214,8 +359,12 @@ struct LgRequest {
     target: String,
 }
 
-async fn diag_lg(State(state): State<SharedState>, Json(body): Json<LgRequest>) -> Response {
-    diag_response(diag::start_lg(&state, body.agent_id, &body.kind, &body.target))
+async fn diag_lg(State(state): State<SharedState>, req: Request) -> Response {
+    let (ip, body) = match take_json::<LgRequest>(&state, req).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    diag_response(diag::start_lg(&state, &ip, body.agent_id, &body.kind, &body.target))
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,8 +374,12 @@ struct MtrRequest {
     cycles: Option<u32>,
 }
 
-async fn diag_mtr(State(state): State<SharedState>, Json(body): Json<MtrRequest>) -> Response {
-    diag_response(diag::start_mtr(&state, body.agent_id, &body.target, body.cycles))
+async fn diag_mtr(State(state): State<SharedState>, req: Request) -> Response {
+    let (ip, body) = match take_json::<MtrRequest>(&state, req).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    diag_response(diag::start_mtr(&state, &ip, body.agent_id, &body.target, body.cycles))
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,7 +394,11 @@ struct Iperf3Request {
     length: Option<u32>,
 }
 
-async fn diag_iperf3(State(state): State<SharedState>, Json(body): Json<Iperf3Request>) -> Response {
+async fn diag_iperf3(State(state): State<SharedState>, req: Request) -> Response {
+    let (ip, body) = match take_json::<Iperf3Request>(&state, req).await {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     // The target still passes through diag::valid_target, which rejects shell
     // metacharacters and leading dashes, so a user-supplied address cannot
     // become argument or command injection.
@@ -259,6 +416,7 @@ async fn diag_iperf3(State(state): State<SharedState>, Json(body): Json<Iperf3Re
     let port = body.port.unwrap_or(5201);
     diag_response(diag::start_iperf3(
         &state,
+        &ip,
         body.agent_id,
         &body.server,
         port,

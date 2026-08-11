@@ -184,13 +184,24 @@ pub fn init(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_streaming_history_lookup
           ON streaming_history (agent_id, service, ts);
+
+        CREATE TABLE IF NOT EXISTS iperf3_log (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          agent_id  INTEGER NOT NULL,
+          client_ip TEXT NOT NULL,
+          target    TEXT NOT NULL,
+          region    TEXT,
+          asn       TEXT,
+          ts        INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_iperf3_log_ts ON iperf3_log (ts);
         ",
     )?;
     migrate(conn)?;
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -287,6 +298,24 @@ fn migrate(conn: &Connection) -> Result<()> {
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_streaming_history_lookup
              ON streaming_history (agent_id, service, ts)",
+            [],
+        )?;
+    }
+    if version < 12 {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS iperf3_log (
+              id        INTEGER PRIMARY KEY AUTOINCREMENT,
+              agent_id  INTEGER NOT NULL,
+              client_ip TEXT NOT NULL,
+              target    TEXT NOT NULL,
+              region    TEXT,
+              asn       TEXT,
+              ts        INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iperf3_log_ts ON iperf3_log (ts)",
             [],
         )?;
     }
@@ -1189,6 +1218,68 @@ pub fn list_streaming_history(
                 status: r.get(1)?,
                 detail: r.get(2)?,
                 ts: r.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------- iperf3 log
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Iperf3LogRow {
+    pub id: i64,
+    pub agent_id: i64,
+    pub client_ip: String,
+    pub target: String,
+    pub region: Option<String>,
+    pub asn: Option<String>,
+    pub ts: i64,
+}
+
+pub fn insert_iperf3_log(
+    conn: &Connection,
+    agent_id: i64,
+    client_ip: &str,
+    target: &str,
+    ts: i64,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO iperf3_log (agent_id, client_ip, target, region, asn, ts)
+         VALUES (?1,?2,?3,NULL,NULL,?4)",
+        params![agent_id, client_ip, target, ts],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_iperf3_log(
+    conn: &Connection,
+    id: i64,
+    region: Option<&str>,
+    asn: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE iperf3_log SET region = ?2, asn = ?3 WHERE id = ?1",
+        params![id, region, asn],
+    )?;
+    Ok(())
+}
+
+pub fn list_iperf3_log(conn: &Connection, limit: i64) -> Result<Vec<Iperf3LogRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_id, client_ip, target, region, asn, ts
+         FROM iperf3_log ORDER BY ts DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |r| {
+            Ok(Iperf3LogRow {
+                id: r.get(0)?,
+                agent_id: r.get(1)?,
+                client_ip: r.get(2)?,
+                target: r.get(3)?,
+                region: r.get(4)?,
+                asn: r.get(5)?,
+                ts: r.get(6)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
