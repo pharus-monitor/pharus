@@ -9,6 +9,7 @@ mod features;
 mod notify;
 mod regions;
 mod state;
+mod themes;
 mod ws;
 
 use anyhow::{Context, Result};

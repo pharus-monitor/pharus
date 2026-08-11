@@ -130,6 +130,7 @@ pub fn init(conn: &Connection) -> Result<()> {
           enabled    INTEGER NOT NULL DEFAULT 1,
           cooldown   INTEGER NOT NULL DEFAULT 1800,
           task_id    INTEGER,
+          consecutive INTEGER NOT NULL DEFAULT 1,
           created_at INTEGER NOT NULL
         );
 
@@ -148,6 +149,7 @@ pub fn init(conn: &Connection) -> Result<()> {
           kind       TEXT NOT NULL,
           config     TEXT NOT NULL DEFAULT '{}',
           enabled    INTEGER NOT NULL DEFAULT 1,
+          failed_streak INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER NOT NULL
         );
 
@@ -159,13 +161,36 @@ pub fn init(conn: &Connection) -> Result<()> {
           ts       INTEGER NOT NULL,
           PRIMARY KEY (agent_id, service)
         );
+
+        CREATE TABLE IF NOT EXISTS themes (
+          id           TEXT PRIMARY KEY,
+          name         TEXT NOT NULL,
+          version      TEXT NOT NULL,
+          author       TEXT,
+          description  TEXT,
+          preview      TEXT,
+          source       TEXT NOT NULL,
+          dir          TEXT NOT NULL,
+          installed_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS streaming_history (
+          id       INTEGER PRIMARY KEY AUTOINCREMENT,
+          agent_id INTEGER NOT NULL,
+          service  TEXT NOT NULL,
+          status   TEXT NOT NULL,
+          detail   TEXT,
+          ts       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_streaming_history_lookup
+          ON streaming_history (agent_id, service, ts);
         ",
     )?;
     migrate(conn)?;
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 11;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -220,6 +245,50 @@ fn migrate(conn: &Connection) -> Result<()> {
         // Alert notify cooldown and per-task failure rules.
         add_column(conn, "alert_rules", "cooldown", "INTEGER NOT NULL DEFAULT 1800")?;
         add_column(conn, "alert_rules", "task_id", "INTEGER")?;
+    }
+    if version < 8 {
+        // Consecutive-failure threshold for task rules.
+        add_column(conn, "alert_rules", "consecutive", "INTEGER NOT NULL DEFAULT 1")?;
+    }
+    if version < 9 {
+        // Notification channel consecutive-failure health counter.
+        add_column(conn, "notification_channels", "failed_streak", "INTEGER NOT NULL DEFAULT 0")?;
+    }
+    if version < 10 {
+        // Installed themes registry.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS themes (
+              id           TEXT PRIMARY KEY,
+              name         TEXT NOT NULL,
+              version      TEXT NOT NULL,
+              author       TEXT,
+              description  TEXT,
+              preview      TEXT,
+              source       TEXT NOT NULL,
+              dir          TEXT NOT NULL,
+              installed_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+    }
+    if version < 11 {
+        // Bounded streaming-check history (kept ~30 days).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS streaming_history (
+              id       INTEGER PRIMARY KEY AUTOINCREMENT,
+              agent_id INTEGER NOT NULL,
+              service  TEXT NOT NULL,
+              status   TEXT NOT NULL,
+              detail   TEXT,
+              ts       INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_streaming_history_lookup
+             ON streaming_history (agent_id, service, ts)",
+            [],
+        )?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
@@ -618,9 +687,21 @@ const PING_TASK_COLS: &str =
 pub fn list_ping_tasks(conn: &Connection) -> Result<Vec<PingTaskRow>> {
     let mut stmt =
         conn.prepare(&format!("SELECT {PING_TASK_COLS} FROM ping_tasks ORDER BY id"))?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map([], ping_task_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    // Operator-defined display order (admin drag-sort), stored as a JSON array
+    // of task ids; unlisted (new) tasks keep their id order at the end.
+    if let Ok(Some(text)) = get_setting(conn, "ping_task_order") {
+        if let Ok(order) = serde_json::from_str::<Vec<i64>>(&text) {
+            let pos: HashMap<i64, usize> = order
+                .into_iter()
+                .enumerate()
+                .map(|(i, id)| (id, i))
+                .collect();
+            rows.sort_by_key(|r| pos.get(&r.id).copied().unwrap_or(usize::MAX));
+        }
+    }
     Ok(rows)
 }
 
@@ -1044,6 +1125,72 @@ pub fn list_streaming(conn: &Connection, agent_id: i64) -> Result<Vec<UnlockResu
     Ok(rows)
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StreamingHistoryRow {
+    pub service: String,
+    pub status: String,
+    pub detail: Option<String>,
+    pub ts: i64,
+}
+
+/// Append a check result to the streaming history, keep at most
+/// [`MAX_STREAMING_ROWS`] rows per agent, and prune samples older than the
+/// 30-day retention window.
+pub fn append_streaming_history(
+    conn: &Connection,
+    agent_id: i64,
+    results: &[UnlockResult],
+) -> Result<()> {
+    let now = now_ts();
+    for r in results {
+        conn.execute(
+            "INSERT INTO streaming_history (agent_id, service, status, detail, ts)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![agent_id, r.service, r.status, r.detail, now],
+        )?;
+    }
+    let cutoff = now - 30 * 86_400;
+    conn.execute(
+        "DELETE FROM streaming_history WHERE agent_id = ?1 AND ts < ?2",
+        params![agent_id, cutoff],
+    )?;
+    conn.execute(
+        "DELETE FROM streaming_history WHERE id IN (
+           SELECT id FROM streaming_history WHERE agent_id = ?1
+           ORDER BY id DESC LIMIT -1 OFFSET ?2
+         )",
+        params![agent_id, MAX_STREAMING_ROWS],
+    )?;
+    Ok(())
+}
+
+/// Cap on history rows kept per agent (checked after every append).
+const MAX_STREAMING_ROWS: i64 = 500;
+
+pub fn list_streaming_history(
+    conn: &Connection,
+    agent_id: i64,
+    since: i64,
+    limit: i64,
+) -> Result<Vec<StreamingHistoryRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT service, status, detail, ts FROM streaming_history
+         WHERE agent_id = ?1 AND ts >= ?2
+         ORDER BY ts DESC LIMIT ?3",
+    )?;
+    let rows = stmt
+        .query_map(params![agent_id, since, limit], |r| {
+            Ok(StreamingHistoryRow {
+                service: r.get(0)?,
+                status: r.get(1)?,
+                detail: r.get(2)?,
+                ts: r.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------- alert rules
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1070,6 +1217,8 @@ pub struct AlertRuleRow {
     pub cooldown: i64,
     /// For kind = "task": only fire on failures of this task.
     pub task_id: Option<i64>,
+    /// For kind = "task": number of consecutive failures required to fire.
+    pub consecutive: i32,
 }
 
 fn alert_rule_from_row(r: &rusqlite::Row) -> rusqlite::Result<AlertRuleRow> {
@@ -1088,11 +1237,12 @@ fn alert_rule_from_row(r: &rusqlite::Row) -> rusqlite::Result<AlertRuleRow> {
         enabled: r.get::<_, i64>(10)? != 0,
         cooldown: r.get::<_, i64>(11)?,
         task_id: r.get(12)?,
+        consecutive: r.get::<_, i32>(13)?,
     })
 }
 
 const ALERT_RULE_COLS: &str =
-    "id, name, kind, agent_id, metric, op, threshold, duration, channels, ratio, enabled, cooldown, task_id";
+    "id, name, kind, agent_id, metric, op, threshold, duration, channels, ratio, enabled, cooldown, task_id, consecutive";
 
 pub fn list_alert_rules(conn: &Connection) -> Result<Vec<AlertRuleRow>> {
     let mut stmt =
@@ -1106,8 +1256,8 @@ pub fn list_alert_rules(conn: &Connection) -> Result<Vec<AlertRuleRow>> {
 pub fn insert_alert_rule(conn: &Connection, a: &AlertRuleRow) -> Result<i64> {
     conn.execute(
         "INSERT INTO alert_rules
-           (name, kind, agent_id, metric, op, threshold, duration, ratio, channels, enabled, cooldown, task_id, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+           (name, kind, agent_id, metric, op, threshold, duration, ratio, channels, enabled, cooldown, task_id, consecutive, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             a.name,
             a.kind,
@@ -1121,6 +1271,7 @@ pub fn insert_alert_rule(conn: &Connection, a: &AlertRuleRow) -> Result<i64> {
             a.enabled as i64,
             a.cooldown,
             a.task_id,
+            a.consecutive,
             now_ts(),
         ],
     )?;
@@ -1131,7 +1282,7 @@ pub fn update_alert_rule(conn: &Connection, id: i64, a: &AlertRuleRow) -> Result
     let rows = conn.execute(
         "UPDATE alert_rules SET name = ?2, kind = ?3, agent_id = ?4, metric = ?5, op = ?6,
            threshold = ?7, duration = ?8, ratio = ?9, channels = ?10, enabled = ?11,
-           cooldown = ?12, task_id = ?13 WHERE id = ?1",
+           cooldown = ?12, task_id = ?13, consecutive = ?14 WHERE id = ?1",
         params![
             id,
             a.name,
@@ -1146,6 +1297,7 @@ pub fn update_alert_rule(conn: &Connection, id: i64, a: &AlertRuleRow) -> Result
             a.enabled as i64,
             a.cooldown,
             a.task_id,
+            a.consecutive,
         ],
     )?;
     Ok(rows)
@@ -1210,6 +1362,8 @@ pub struct ChannelRow {
     /// Channel-specific config; secret-bearing fields are encrypted at rest.
     pub config: serde_json::Value,
     pub enabled: bool,
+    /// Consecutive delivery failures; used to flag unhealthy channels.
+    pub failed_streak: i32,
 }
 
 fn channel_from_row(r: &rusqlite::Row) -> rusqlite::Result<ChannelRow> {
@@ -1220,12 +1374,22 @@ fn channel_from_row(r: &rusqlite::Row) -> rusqlite::Result<ChannelRow> {
         kind: r.get(2)?,
         config: serde_json::from_str(&config).unwrap_or(serde_json::Value::Null),
         enabled: r.get::<_, i64>(4)? != 0,
+        failed_streak: r.get::<_, i64>(5)? as i32,
     })
 }
 
+pub fn set_channel_streak(conn: &Connection, id: i64, streak: i32) -> Result<()> {
+    conn.execute(
+        "UPDATE notification_channels SET failed_streak = ?2 WHERE id = ?1",
+        params![id, streak],
+    )?;
+    Ok(())
+}
+
 pub fn list_channels(conn: &Connection) -> Result<Vec<ChannelRow>> {
-    let mut stmt =
-        conn.prepare("SELECT id, name, kind, config, enabled FROM notification_channels ORDER BY id")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, kind, config, enabled, failed_streak FROM notification_channels ORDER BY id",
+    )?;
     let rows = stmt
         .query_map([], channel_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1235,7 +1399,7 @@ pub fn list_channels(conn: &Connection) -> Result<Vec<ChannelRow>> {
 pub fn get_channel(conn: &Connection, id: i64) -> Result<Option<ChannelRow>> {
     let row = conn
         .query_row(
-            "SELECT id, name, kind, config, enabled FROM notification_channels WHERE id = ?1",
+            "SELECT id, name, kind, config, enabled, failed_streak FROM notification_channels WHERE id = ?1",
             params![id],
             channel_from_row,
         )
@@ -1275,6 +1439,85 @@ pub fn update_channel(conn: &Connection, id: i64, c: &ChannelRow) -> Result<usiz
 
 pub fn delete_channel(conn: &Connection, id: i64) -> Result<usize> {
     Ok(conn.execute("DELETE FROM notification_channels WHERE id = ?1", params![id])?)
+}
+
+// ---------------------------------------------------------------- themes
+
+#[derive(Debug, Clone)]
+pub struct ThemeRow {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub preview: Option<String>,
+    pub source: String,
+    pub dir: String,
+    pub installed_at: i64,
+}
+
+fn theme_from_row(r: &rusqlite::Row) -> rusqlite::Result<ThemeRow> {
+    Ok(ThemeRow {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        version: r.get(2)?,
+        author: r.get(3)?,
+        description: r.get(4)?,
+        preview: r.get(5)?,
+        source: r.get(6)?,
+        dir: r.get(7)?,
+        installed_at: r.get(8)?,
+    })
+}
+
+pub fn list_themes(conn: &Connection) -> Result<Vec<ThemeRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, version, author, description, preview, source, dir, installed_at
+         FROM themes ORDER BY installed_at DESC",
+    )?;
+    let rows = stmt
+        .query_map([], theme_from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn get_theme(conn: &Connection, id: &str) -> Result<Option<ThemeRow>> {
+    let row = conn
+        .query_row(
+            "SELECT id, name, version, author, description, preview, source, dir, installed_at
+             FROM themes WHERE id = ?1",
+            params![id],
+            theme_from_row,
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub fn upsert_theme(conn: &Connection, t: &ThemeRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO themes (id, name, version, author, description, preview, source, dir, installed_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+         ON CONFLICT(id) DO UPDATE SET
+           name=excluded.name, version=excluded.version, author=excluded.author,
+           description=excluded.description, preview=excluded.preview,
+           source=excluded.source, dir=excluded.dir, installed_at=excluded.installed_at",
+        params![
+            t.id,
+            t.name,
+            t.version,
+            t.author,
+            t.description,
+            t.preview,
+            t.source,
+            t.dir,
+            t.installed_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_theme(conn: &Connection, id: &str) -> Result<usize> {
+    Ok(conn.execute("DELETE FROM themes WHERE id = ?1", params![id])?)
 }
 
 #[cfg(test)]

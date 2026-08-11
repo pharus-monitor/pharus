@@ -53,6 +53,7 @@ struct Evaluator {
     windows: HashMap<AlertKey, SampleWindow>,
     states: HashMap<AlertKey, AlertStateRow>,
     offline_since: HashMap<AlertKey, i64>,
+    task_failures: HashMap<AlertKey, u32>,
     signatures: HashMap<i64, RuleSignature>,
 }
 
@@ -62,6 +63,7 @@ impl Evaluator {
             windows: HashMap::new(),
             states,
             offline_since: HashMap::new(),
+            task_failures: HashMap::new(),
             signatures: HashMap::new(),
         }
     }
@@ -106,14 +108,27 @@ impl Evaluator {
                     "metric" => metric_observation(rule, agent),
                     "offline" => Some(self.offline_observation(rule, agent, now)),
                     "task" => {
-                        if let Some(tid) = rule.task_id {
+                        let mut obs = if let Some(tid) = rule.task_id {
                             task_observations.get(&(agent.id, tid)).cloned()
                         } else {
                             task_observations
                                 .iter()
                                 .find(|((a, _), _)| *a == agent.id)
                                 .map(|(_, o)| o.clone())
+                        };
+                        if let Some(o) = obs.as_mut() {
+                            let key = (rule.id, agent.id);
+                            let count = self.task_failures.entry(key).or_insert(0);
+                            if o.breached {
+                                *count += 1;
+                                let required = rule.consecutive.max(1) as u32;
+                                o.breached = *count >= required;
+                                o.observed = format!("连续失败 {count} 次（要求 {required} 次）");
+                            } else {
+                                *count = 0;
+                            }
                         }
+                        obs
                     }
                     _ => None,
                 };
@@ -136,6 +151,8 @@ impl Evaluator {
 
         self.windows.retain(|key, _| active_pairs.contains(key));
         self.offline_since
+            .retain(|key, _| active_pairs.contains(key));
+        self.task_failures
             .retain(|key, _| active_pairs.contains(key));
         Ok(())
     }
@@ -305,6 +322,8 @@ struct AgentSnapshot {
     data: Option<Metrics>,
     traffic_used: u64,
     traffic_quota: Option<u64>,
+    /// Average ping loss across all tasks, percent 0..=100.
+    ping_loss: Option<f64>,
 }
 
 fn snapshot_agents(state: &SharedState) -> Result<Vec<AgentSnapshot>> {
@@ -327,6 +346,19 @@ fn snapshot_agents(state: &SharedState) -> Result<Vec<AgentSnapshot>> {
                 .billing
                 .as_ref()
                 .and_then(|billing| billing.quota_bytes),
+            ping_loss: {
+                let losses: Vec<f64> = agent
+                    .pings
+                    .iter()
+                    .map(|p| p.loss)
+                    .filter(|l| *l >= 0.0 && *l <= 1.0)
+                    .collect();
+                if losses.is_empty() {
+                    None
+                } else {
+                    Some(losses.iter().sum::<f64>() / losses.len() as f64 * 100.0)
+                }
+            },
         })
         .collect();
     snapshots.sort_unstable_by_key(|agent| agent.id);
@@ -387,6 +419,7 @@ fn metric_observation(rule: &AlertRuleRow, agent: &AgentSnapshot) -> Option<Obse
             percentage(agent.traffic_used, agent.traffic_quota?)?,
             true,
         ),
+        "loss" => ("丢包率", agent.ping_loss?, true),
         _ => return None,
     };
     let breached = compare(rule.op.as_str(), value, rule.threshold)?;

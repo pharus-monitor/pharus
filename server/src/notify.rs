@@ -45,14 +45,34 @@ pub async fn dispatch(state: &SharedState, channel_ids: &[i64], n: &Notification
         channels
     };
 
+    // Deliver each channel on its own task so a slow/blackholed endpoint
+    // (retries + backoff can take ~45s) never stalls alert evaluation for the
+    // other channels or the next tick.
     for channel in channels {
-        if send(state, &channel, n).await.is_err() {
-            tracing::warn!(
-                channel_id = channel.id,
-                channel_name = %channel.name,
-                "notification delivery failed"
-            );
-        }
+        let state = state.clone();
+        let n = n.clone();
+        tokio::spawn(async move {
+            let outcome = tokio::time::timeout(Duration::from_secs(75), send(&state, &channel, &n))
+                .await
+                .unwrap_or(Err(anyhow!("channel send timed out")));
+            if outcome.is_err() {
+                tracing::warn!(
+                    channel_id = channel.id,
+                    channel_name = %channel.name,
+                    "notification delivery failed"
+                );
+                set_channel_streak(&state, channel.id, channel.failed_streak.saturating_add(1));
+            } else {
+                set_channel_streak(&state, channel.id, 0);
+            }
+        });
+    }
+}
+
+/// Persist a channel's consecutive-failure streak (0 = healthy).
+fn set_channel_streak(state: &SharedState, id: i64, streak: i32) {
+    if let Ok(conn) = state.db.lock() {
+        let _ = crate::db::set_channel_streak(&conn, id, streak);
     }
 }
 
@@ -70,7 +90,9 @@ pub async fn test_channel(state: &SharedState, channel_id: i64) -> Result<()> {
         title: "Pharus 通知测试".to_string(),
         body: "这是一条测试消息，收到后说明通知通道配置正确。".to_string(),
     };
-    send(state, &channel, &notification).await
+    send(state, &channel, &notification).await?;
+    set_channel_streak(state, channel_id, 0);
+    Ok(())
 }
 
 async fn send(_state: &SharedState, channel: &ChannelRow, n: &Notification) -> Result<()> {
@@ -112,20 +134,12 @@ async fn send_email(config: &Value, n: &Notification) -> Result<()> {
     let smtp_port = required_port(config, "smtp_port")?;
     let username = required_str(config, "username")?;
     let password = required_str(config, "password")?;
-    let from = required_str(config, "from")?
+    let from: lettre::message::Mailbox = required_str(config, "from")?
         .parse()
         .map_err(|_| anyhow!("发件地址格式无效"))?;
-    let to = required_str(config, "to")?
+    let to: lettre::message::Mailbox = required_str(config, "to")?
         .parse()
         .map_err(|_| anyhow!("收件地址格式无效"))?;
-
-    let message = Message::builder()
-        .from(from)
-        .to(to)
-        .subject(&n.title)
-        .header(ContentType::TEXT_PLAIN)
-        .body(n.body.clone())
-        .map_err(|_| anyhow!("邮件内容构建失败"))?;
 
     let builder = if smtp_port == 465 {
         AsyncSmtpTransport::<Tokio1Executor>::relay(smtp_host)
@@ -138,11 +152,24 @@ async fn send_email(config: &Value, n: &Notification) -> Result<()> {
         .credentials(Credentials::new(username.to_owned(), password.to_owned()))
         .build();
 
-    transport
-        .send(message)
-        .await
-        .map_err(|_| anyhow!("SMTP 发送失败"))?;
-    Ok(())
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+        }
+        let message = Message::builder()
+            .from(from.clone())
+            .to(to.clone())
+            .subject(&n.title)
+            .header(ContentType::TEXT_PLAIN)
+            .body(n.body.clone())
+            .map_err(|_| anyhow!("邮件内容构建失败"))?;
+        match transport.send(message).await {
+            Ok(_) => return Ok(()),
+            Err(err) => last_err = Some(anyhow!("SMTP 发送失败: {err}")),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("SMTP 发送失败")))
 }
 
 async fn send_bark(config: &Value, n: &Notification) -> Result<()> {
@@ -209,16 +236,18 @@ async fn post_json(url: &str, payload: &Value) -> Result<()> {
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|_| anyhow!("HTTP 客户端初始化失败"))?;
-    let response = client
-        .post(url)
-        .json(payload)
-        .send()
-        .await
-        .map_err(|_| anyhow!("HTTP 请求失败"))?;
-    if !response.status().is_success() {
-        bail!("HTTP 服务返回失败状态");
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+        }
+        match client.post(url).json(payload).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(_) => last_err = Some(anyhow!("HTTP 服务返回失败状态")),
+            Err(_) => last_err = Some(anyhow!("HTTP 请求失败")),
+        }
     }
-    Ok(())
+    Err(last_err.unwrap_or_else(|| anyhow!("HTTP 请求失败")))
 }
 
 fn notification_text(n: &Notification) -> String {

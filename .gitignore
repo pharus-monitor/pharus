@@ -7,4 +7,5 @@ pharus.toml
 .gstack/
 设计大纲.md
 .claude/
+.live-theme/
 .ap.sh

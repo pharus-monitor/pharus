@@ -181,7 +181,14 @@ async fn streaming(State(state): State<SharedState>, Path(agent_id): Path<i64>) 
             }
         }
     };
-    Json(serde_json::json!({ "results": results })).into_response()
+    let history = {
+        let conn = state.db.lock().unwrap();
+        match db::list_streaming_history(&conn, agent_id, now() - 7 * 86_400, 200) {
+            Ok(r) => r,
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    };
+    Json(serde_json::json!({ "results": results, "history": history })).into_response()
 }
 
 fn diag_response(result: Result<String, diag::DiagError>) -> Response {

@@ -23,6 +23,11 @@
   var pingLoss = document.getElementById('ping-loss');
   var pingTip = document.getElementById('ping-tip');
   var pingGuide = document.getElementById('ping-guide');
+  var metricsRange = document.getElementById('metrics-range');
+  var metricsMessage = document.getElementById('metrics-message');
+  var metricsChart = document.getElementById('metrics-chart');
+  var metricsLegend = document.getElementById('metrics-legend');
+  var metricsTip = document.getElementById('metrics-tip');
   var diagTarget = document.getElementById('diag-target');
   var diagCycles = document.getElementById('diag-cycles');
   var diagPing = document.getElementById('diag-ping');
@@ -45,6 +50,7 @@
   var diagEmpty = document.getElementById('diag-empty');
   var streamingMessage = document.getElementById('streaming-message');
   var streamingResults = document.getElementById('streaming-results');
+  var streamingHistory = document.getElementById('streaming-history');
   var editModeBtn = document.getElementById('edit-mode-btn');
   var tokenModal = document.getElementById('token-modal');
   var tokenInput = document.getElementById('token-input');
@@ -90,8 +96,9 @@
   var diagRequests = new Map();
   var pingChartData = { tasks: [], points: [] };
   var pingLoadId = 0;
+  var metricsChartData = [];
+  var metricsLoadId = 0;
   var streamingLoadId = 0;
-  var adminToken = null;
   var adminOn = false;
   var editingId = null;
   var lastChart = null;
@@ -554,6 +561,120 @@
     });
   }
 
+  /* ---------- metrics history ---------- */
+  var METRIC_SERIES = [
+    { key: 'cpu', label: 'metric.cpu', color: '#fbbf24',
+      value: function (p) { return Number(p.cpu_usage); } },
+    { key: 'mem', label: 'metric.mem', color: '#38bdf8',
+      value: function (p) { return p.mem_total > 0 ? Number(p.mem_used) / Number(p.mem_total) * 100 : null; } },
+    { key: 'disk', label: 'metric.disk', color: '#a78bfa',
+      value: function (p) { return p.disk_total > 0 ? Number(p.disk_used) / Number(p.disk_total) * 100 : null; } }
+  ];
+
+  function loadMetricsHistory() {
+    if (!entry) return;
+    var seq = ++metricsLoadId;
+    var url = '/api/agents/' + hostId + '/history?range=' + encodeURIComponent(metricsRange.value);
+    metricsMessage.textContent = t('common.loading');
+    P.requestJson(url).then(function (body) {
+      if (seq !== metricsLoadId) return;
+      metricsChartData = Array.isArray(body.points) ? body.points : [];
+      metricsMessage.textContent = metricsChartData.length ? '' : t('common.noData');
+      drawMetricsChart();
+    }).catch(function (error) {
+      if (seq !== metricsLoadId) return;
+      metricsChartData = [];
+      metricsMessage.textContent = t('common.error') + ': ' + error.message;
+      drawMetricsChart();
+    });
+  }
+
+  function formatMetricsTime(ts) {
+    var date = new Date(ts * 1000);
+    if (metricsRange.value === '7d') {
+      return (date.getMonth() + 1) + '/' + date.getDate() + ' ' + date.getHours() + ':00';
+    }
+    var h = date.getHours();
+    var m = date.getMinutes();
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+
+  function drawMetricsChart() {
+    var rect = metricsChart.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var ratio = window.devicePixelRatio || 1;
+    metricsChart.width = Math.round(rect.width * ratio);
+    metricsChart.height = Math.round(rect.height * ratio);
+    var ctx = metricsChart.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    metricsLegend.innerHTML = '';
+    metricsTip.hidden = true;
+
+    var points = metricsChartData.filter(function (point) { return Number.isFinite(Number(point.ts)); });
+    if (!points.length) return;
+
+    var nowSec = Math.floor(Date.now() / 1000);
+    var minTs = nowSec - (CHART_RANGE[metricsRange.value] || 86400);
+    var maxTs = nowSec;
+    var left = 42, right = 12, top = 12, plotBottom = rect.height - 26;
+    var plotWidth = Math.max(1, rect.width - left - right);
+    var plotHeight = Math.max(1, plotBottom - top);
+    var xAt = function (ts) { return left + (Number(ts) - minTs) / (maxTs - minTs) * plotWidth; };
+    var yAt = function (pct) { return top + (1 - pct / 100) * plotHeight; };
+
+    ctx.lineWidth = 1;
+    ctx.font = '10px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
+    ctx.textBaseline = 'middle';
+    for (var line = 0; line <= 4; line++) {
+      var y = top + plotHeight * line / 4;
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(rect.width - right, y);
+      ctx.stroke();
+      ctx.fillStyle = '#64748b';
+      ctx.textAlign = 'right';
+      ctx.fillText(Math.round(100 * (1 - line / 4)) + '%', left - 6, y);
+    }
+    ctx.fillStyle = '#64748b';
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.fillText(formatMetricsTime(minTs), left, rect.height - 5);
+    ctx.textAlign = 'right';
+    ctx.fillText(formatMetricsTime(maxTs), rect.width - right, rect.height - 5);
+
+    var sorted = points.slice().sort(function (a, b) { return Number(a.ts) - Number(b.ts); });
+    METRIC_SERIES.forEach(function (series) {
+      var line = [];
+      for (var i = 0; i < sorted.length; i++) {
+        var v = series.value(sorted[i]);
+        if (v == null || !Number.isFinite(v)) continue;
+        line.push([xAt(sorted[i].ts), yAt(Math.max(0, Math.min(100, v)))]);
+      }
+      if (line.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(line[0][0], line[0][1]);
+      for (var j = 1; j < line.length; j++) ctx.lineTo(line[j][0], line[j][1]);
+      ctx.strokeStyle = series.color;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    });
+
+    METRIC_SERIES.forEach(function (series) {
+      var legend = document.createElement('span');
+      legend.className = 'chart-legend-item';
+      var swatch = document.createElement('span');
+      swatch.className = 'chart-swatch';
+      swatch.style.background = series.color;
+      var label = document.createElement('span');
+      label.textContent = t(series.label);
+      legend.appendChild(swatch);
+      legend.appendChild(label);
+      metricsLegend.appendChild(legend);
+    });
+  }
+
   /* ---------- diagnostics ---------- */
   function showDiagTab(which) {
     var lg = which === 'lg';
@@ -873,11 +994,54 @@
       renderUnlock();
       streamingMessage.textContent = '';
       renderServiceResults(results);
+      renderStreamingHistory(Array.isArray(body.history) ? body.history : []);
     }).catch(function (error) {
       if (seq !== streamingLoadId) return;
       streamingResults.innerHTML = '';
+      streamingHistory.innerHTML = '';
+      streamingHistory.hidden = true;
       streamingMessage.textContent = t('common.error') + ': ' + error.message;
     });
+  }
+
+  function renderStreamingHistory(history) {
+    streamingHistory.innerHTML = '';
+    if (!history.length) {
+      streamingHistory.hidden = true;
+      return;
+    }
+    streamingHistory.hidden = false;
+    var title = document.createElement('h4');
+    title.className = 'streaming-history-title';
+    title.textContent = t('streaming.history');
+    streamingHistory.appendChild(title);
+    var list = document.createElement('ul');
+    list.className = 'streaming-history-list';
+    // newest first, grouped by service, capped at a reasonable scroll area
+    var shown = 0;
+    history.forEach(function (row) {
+      if (shown >= 60) return;
+      shown++;
+      var item = document.createElement('li');
+      var status = P.serviceStatus({ status: row.status });
+      var name = document.createElement('span');
+      name.className = 'streaming-history-service';
+      name.textContent = row.service;
+      var when = document.createElement('span');
+      when.className = 'streaming-history-time';
+      var dt = new Date(row.ts * 1000);
+      var hh = dt.getHours(), mm = dt.getMinutes();
+      when.textContent = dt.getFullYear() + '-' + ((dt.getMonth() + 1) < 10 ? '0' : '') + (dt.getMonth() + 1) + '-' + (dt.getDate() < 10 ? '0' : '') + dt.getDate()
+        + ' ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
+      var st = document.createElement('span');
+      st.className = 'streaming-history-status ' + P.statusClass(status);
+      st.textContent = t('streaming.status.' + status);
+      item.appendChild(name);
+      item.appendChild(when);
+      item.appendChild(st);
+      list.appendChild(item);
+    });
+    streamingHistory.appendChild(list);
   }
 
   /* ---------- ws ---------- */
@@ -902,6 +1066,7 @@
     renderAll();
     loadPingHistory(false);
     loadStreaming();
+    loadMetricsHistory();
   }
 
   function handleMessage(msg) {
@@ -956,11 +1121,10 @@
     }
   }
 
-  function checkToken(tok) {
-    return fetch('/api/admin/check', {
-      method: 'POST',
-      headers: tok ? { Authorization: 'Bearer ' + tok } : {}
-    }).then(function (r) { return r.status; }).catch(function () { return 0; });
+  function checkSession() {
+    // Admin session is an HttpOnly cookie; no token lives in JS.
+    return fetch('/api/admin/check', { method: 'POST' })
+      .then(function (r) { return r.status; }).catch(function () { return 0; });
   }
 
   function doLogin(username, password) {
@@ -983,8 +1147,6 @@
   }
 
   function handleUnauthorized() {
-    localStorage.removeItem('pharus.admin');
-    adminToken = null;
     setAdmin(false);
     tokenErr.textContent = t('admin.unauthorized');
     tokenErr.hidden = false;
@@ -1035,7 +1197,7 @@
     };
     fetch('/api/admin/agents/' + editingId + '/billing', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(parseAdmin).then(function (res) {
       entry.billing = res.billing;
@@ -1073,7 +1235,7 @@
     atSubmit.disabled = true;
     fetch('/api/admin/ping-tasks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(parseAdmin).then(function () {
       atLabel.value = '';
@@ -1099,7 +1261,7 @@
     renameSave.disabled = true;
     fetch('/api/admin/agents/' + hostId + '/name', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name })
     }).then(parseAdmin).then(function () {
       entry.name = name;
@@ -1115,20 +1277,16 @@
   }
 
   function probeAdminLink() {
+    // Sessions are HttpOnly cookies now; purge tokens stored by older versions.
+    localStorage.removeItem('pharus.admin');
+    sessionStorage.removeItem('pharus.admin');
     P.requestJson('/api/meta').then(function (meta) {
       if (card && entry) renderBilling();
       if (!meta.admin_enabled) return;
       adminLink.hidden = false;
       editModeBtn.hidden = false;
-      var saved = localStorage.getItem('pharus.admin');
-      if (!saved) return;
-      checkToken(saved).then(function (st) {
-        if (st === 200) {
-          adminToken = saved;
-          setAdmin(true);
-        } else {
-          localStorage.removeItem('pharus.admin');
-        }
+      checkSession().then(function (st) {
+        if (st === 200) setAdmin(true);
       });
     }).catch(function () {});
   }
@@ -1136,6 +1294,35 @@
   /* ---------- events ---------- */
   pingTask.addEventListener('change', function () { loadPingHistory(false); });
   pingRange.addEventListener('change', function () { loadPingHistory(false); });
+  metricsRange.addEventListener('change', loadMetricsHistory);
+  var metricsChartWrap = document.getElementById('metrics-chart-wrap');
+  metricsChartWrap.addEventListener('mousemove', function (ev) {
+    if (!metricsChartData.length) return;
+    var rect = metricsChart.getBoundingClientRect();
+    var nowSec = Math.floor(Date.now() / 1000);
+    var minTs = nowSec - (CHART_RANGE[metricsRange.value] || 86400);
+    var maxTs = nowSec;
+    var left = 42;
+    var x = ev.clientX - rect.left;
+    var ts = minTs + (x - left) / (rect.width - left - 12) * (maxTs - minTs);
+    var nearest = null, bestD = Infinity;
+    metricsChartData.forEach(function (p) {
+      var d = Math.abs(Number(p.ts) - ts);
+      if (d < bestD) { bestD = d; nearest = p; }
+    });
+    if (!nearest) return;
+    metricsTip.hidden = false;
+    metricsTip.style.left = Math.min(rect.width - 150, Math.max(0, x)) + 'px';
+    metricsTip.style.top = '8px';
+    var parts = [formatMetricsTime(nearest.ts)];
+    METRIC_SERIES.forEach(function (series) {
+      var v = series.value(nearest);
+      if (v == null || !Number.isFinite(v)) return;
+      parts.push(t(series.label) + ' ' + Math.round(v * 10) / 10 + '%');
+    });
+    metricsTip.textContent = parts.join(' · ');
+  });
+  metricsChartWrap.addEventListener('mouseleave', function () { metricsTip.hidden = true; });
   diagPing.addEventListener('click', function () { runDiagnostic('ping'); });
   diagTraceroute.addEventListener('click', function () { runDiagnostic('traceroute'); });
   diagMtr.addEventListener('click', function () { runDiagnostic('mtr'); });
@@ -1145,24 +1332,26 @@
   editModeBtn.addEventListener('click', function () {
     if (adminOn) {
       setAdmin(false);
-    } else if (adminToken) {
-      setAdmin(true);
-    } else {
-      tokenErr.hidden = true;
-      tokenUsername.value = '';
-      tokenInput.value = '';
-      tokenModal.hidden = false;
-      tokenUsername.focus();
+      return;
     }
+    checkSession().then(function (st) {
+      if (st === 200) {
+        setAdmin(true);
+      } else {
+        tokenErr.hidden = true;
+        tokenUsername.value = '';
+        tokenInput.value = '';
+        tokenModal.hidden = false;
+        tokenUsername.focus();
+      }
+    });
   });
   document.getElementById('token-submit').addEventListener('click', function () {
     var u = tokenUsername.value.trim();
     var p = tokenInput.value;
     if (!u || !p) return;
     doLogin(u, p).then(function (res) {
-      if (res.status === 200 && res.body && res.body.token) {
-        adminToken = res.body.token;
-        localStorage.setItem('pharus.admin', res.body.token);
+      if (res.status === 200) {
         tokenModal.hidden = true;
         setAdmin(true);
       } else {
@@ -1188,22 +1377,29 @@
   });
   addTaskBtn.addEventListener('click', function () {
     if (!adminOn) {
-      if (!adminToken) {
-        tokenErr.hidden = true;
-        tokenUsername.value = '';
-        tokenInput.value = '';
-        tokenModal.hidden = false;
-        tokenUsername.focus();
-        return;
-      }
-      setAdmin(true);
+      checkSession().then(function (st) {
+        if (st === 200) {
+          setAdmin(true);
+          openAddTask();
+        } else {
+          tokenErr.hidden = true;
+          tokenUsername.value = '';
+          tokenInput.value = '';
+          tokenModal.hidden = false;
+          tokenUsername.focus();
+        }
+      });
+      return;
     }
+    openAddTask();
+  });
+  function openAddTask() {
     atErr.hidden = true;
     atLabel.value = '';
     atTarget.value = '';
     atPortField.hidden = atKind.value === 'icmp';
     atModal.hidden = false;
-  });
+  }
   atSubmit.addEventListener('click', addPingTask);
   atCancel.addEventListener('click', function () { atModal.hidden = true; });
   renameSave.addEventListener('click', renameAgent);
@@ -1230,7 +1426,11 @@
   window.addEventListener('resize', function () {
     if (chartResizePending) return;
     chartResizePending = true;
-    requestAnimationFrame(function () { chartResizePending = false; drawPingChart(); });
+    requestAnimationFrame(function () {
+      chartResizePending = false;
+      drawPingChart();
+      drawMetricsChart();
+    });
   });
 
   // hover tooltip on the latency chart: the curve closest to the pointer

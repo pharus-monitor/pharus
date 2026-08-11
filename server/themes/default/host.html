@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="doc.title.host">Pharus · Host</title>
-  <link rel="stylesheet" href="style.css?v=0.5.0" />
+  <link rel="stylesheet" href="style.css?v=0.5.1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -56,6 +56,32 @@
         </div>
       </div>
       <div class="hw-grid" id="hw-grid"></div>
+    </section>
+
+    <section class="feature-panel feature-wide" id="metrics-panel">
+      <div class="panel-head">
+        <div>
+          <h2 data-i18n="history.title">指标历史</h2>
+          <p data-i18n="history.subtitle">CPU、内存与磁盘使用率趋势</p>
+        </div>
+      </div>
+      <div class="panel-controls">
+        <label class="field compact">
+          <span data-i18n="common.range">时间范围</span>
+          <select id="metrics-range">
+            <option value="1h" selected data-i18n="range.1h">1 小时</option>
+            <option value="6h" data-i18n="range.6h">6 小时</option>
+            <option value="24h" data-i18n="range.24h">24 小时</option>
+            <option value="7d" data-i18n="range.7d">7 天</option>
+          </select>
+        </label>
+      </div>
+      <p class="panel-message" id="metrics-message" role="status"></p>
+      <div class="chart-wrap" id="metrics-chart-wrap">
+        <canvas id="metrics-chart" role="img" data-i18n-aria="history.chartAria" aria-label="指标历史折线图"></canvas>
+        <div class="chart-tip" id="metrics-tip" hidden></div>
+      </div>
+      <div class="chart-legend" id="metrics-legend"></div>
     </section>
 
     <div class="feature-grid" id="feature-grid">
@@ -170,6 +196,7 @@
         </div>
         <p class="panel-message" id="streaming-message" role="status"></p>
         <div class="service-results" id="streaming-results"></div>
+        <div class="streaming-history" id="streaming-history" hidden></div>
       </section>
 
     </div>

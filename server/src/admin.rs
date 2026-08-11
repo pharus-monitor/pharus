@@ -1,12 +1,12 @@
 use crate::api::err;
 use crate::state::SharedState;
-use crate::{billing, crypto, db, diag, features, notify, regions};
+use crate::{billing, crypto, db, diag, features, notify, regions, themes};
 use axum::{
-    extract::{Extension, Path, Query, Request, State},
+    extract::{Extension, Multipart, Path, Query, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use chrono::TimeZone;
@@ -21,7 +21,7 @@ use std::time::Duration;
 const CHANNEL_KINDS: &[&str] = &[
     "telegram", "webhook", "email", "bark", "feishu", "dingtalk", "wecom", "discord",
 ];
-const ALERT_METRICS: &[&str] = &["cpu", "mem", "disk", "load", "traffic"];
+const ALERT_METRICS: &[&str] = &["cpu", "mem", "disk", "load", "traffic", "loss"];
 
 pub fn router(state: SharedState) -> Router<SharedState> {
     let protected = Router::new()
@@ -70,7 +70,16 @@ pub fn router(state: SharedState) -> Router<SharedState> {
             get(list_agent_secrets).put(save_agent_secrets),
         )
         .route("/api/admin/password", put(update_password))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
+        .route("/api/admin/themes", get(list_themes).post(upload_theme))
+        .route(
+            "/api/admin/themes/:id/activate",
+            post(activate_theme),
+        )
+        .route("/api/admin/themes/:id", delete(delete_theme))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_admin))
+        // Theme zips can legitimately exceed axum's default 2 MiB body cap;
+        // the upload path caps total bytes itself and extraction is bounded.
+        .route_layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 4096));
     Router::new()
         .route("/api/admin/login", post(login))
         .route("/api/admin/logout", post(logout))
@@ -82,22 +91,78 @@ struct AdminSession(String);
 
 const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 
-async fn require_admin(State(state): State<SharedState>, mut req: Request, next: Next) -> Response {
-    let token = req
-        .headers()
+/// HttpOnly session cookie. Browsers authenticate with it instead of a Bearer
+/// header, so third-party theme code (arbitrary JS) can never read the token.
+const SESSION_COOKIE: &str = "pharus_admin";
+
+/// True when the request arrived over TLS directly or via a reverse proxy that
+/// sets `X-Forwarded-Proto` (Caddy/Nginx). `Secure` cookies are only sent by
+/// the browser over HTTPS, so enabling it on plaintext deployments would lock
+/// admins out.
+fn request_is_secure(req: &Request) -> bool {
+    req.uri().scheme_str() == Some("https")
+        || req
+            .headers()
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+}
+
+fn set_session_cookie(response: &mut Response, token: &str, secure: bool) {
+    let mut cookie = format!(
+        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    response
+        .headers_mut()
+        .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
+}
+
+fn clear_session_cookie(response: &mut Response, secure: bool) {
+    let mut cookie = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    response
+        .headers_mut()
+        .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
+}
+
+/// Prefer the HttpOnly cookie, fall back to a Bearer token for programmatic
+/// clients (curl, scripts).
+fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(raw) = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+    {
+        let prefix = format!("{SESSION_COOKIE}=");
+        for pair in raw.split(';') {
+            if let Some(value) = pair.trim().strip_prefix(&prefix) {
+                return Some(value.to_string());
+            }
+        }
+    }
+    headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+}
+
+async fn require_admin(State(state): State<SharedState>, mut req: Request, next: Next) -> Response {
+    let token = extract_session_token(req.headers());
     let Some(token) = token else {
         return err(StatusCode::UNAUTHORIZED, "missing bearer token");
     };
     let username = {
         let mut sessions = state.sessions.lock().unwrap();
-        let Some((username, created)) = sessions.get(token) else {
+        let Some((username, created)) = sessions.get(&token) else {
             return err(StatusCode::UNAUTHORIZED, "invalid session");
         };
         if created.elapsed() > SESSION_TTL {
-            sessions.remove(token);
+            sessions.remove(&token);
             return err(StatusCode::UNAUTHORIZED, "session expired");
         }
         username.clone()
@@ -134,7 +199,20 @@ pub struct LoginBody {
     pub password: String,
 }
 
-async fn login(State(state): State<SharedState>, Json(body): Json<LoginBody>) -> Response {
+async fn login(State(state): State<SharedState>, req: Request) -> Response {
+    let (parts, body) = req.into_parts();
+    let secure = parts.uri.scheme_str() == Some("https")
+        || parts
+            .headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("https"));
+    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
+        return err(StatusCode::BAD_REQUEST, "invalid request body");
+    };
+    let Ok(body) = serde_json::from_slice::<LoginBody>(&bytes) else {
+        return err(StatusCode::BAD_REQUEST, "invalid request body");
+    };
     let record = {
         let conn = state.db.lock().unwrap();
         match db::find_user(&conn, &body.username) {
@@ -154,20 +232,19 @@ async fn login(State(state): State<SharedState>, Json(body): Json<LoginBody>) ->
         .lock()
         .unwrap()
         .insert(token.clone(), (body.username.clone(), std::time::Instant::now()));
-    Json(serde_json::json!({ "token": token })).into_response()
+    let mut response = Json(serde_json::json!({ "token": token })).into_response();
+    set_session_cookie(&mut response, &token, secure);
+    response
 }
 
 async fn logout(State(state): State<SharedState>, req: Request) -> Response {
-    let token = req
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let token = extract_session_token(req.headers());
     if let Some(token) = token {
         state.sessions.lock().unwrap().remove(&token);
     }
-    StatusCode::OK.into_response()
+    let mut response = StatusCode::OK.into_response();
+    clear_session_cookie(&mut response, request_is_secure(&req));
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -231,7 +308,7 @@ async fn update_setting(
                 return bad("default_language must be en, zh-CN, ja or ru");
             }
         }
-        "agent_order" | "region_order" => {
+        "agent_order" | "region_order" | "ping_task_order" => {
             match serde_json::from_str::<Vec<serde_json::Value>>(&body.value) {
                 Ok(v) if v.len() <= 4096 => {}
                 _ => return bad("order must be a JSON array of at most 4096 entries"),
@@ -250,6 +327,10 @@ async fn update_setting(
         if let Err(e) = db::set_setting(&conn, &body.key, &body.value) {
             return db_err(e);
         }
+    }
+    // the task order lives in a setting but drives what agents run and show
+    if body.key == "ping_task_order" {
+        state.push_tasks_all();
     }
     StatusCode::OK.into_response()
 }
@@ -876,10 +957,16 @@ struct AlertRuleBody {
     cooldown: i64,
     #[serde(default)]
     task_id: Option<i64>,
+    #[serde(default = "default_consecutive")]
+    consecutive: i32,
 }
 
 fn default_cooldown() -> i64 {
     1800
+}
+
+fn default_consecutive() -> i32 {
+    1
 }
 
 fn gt() -> String {
@@ -910,6 +997,9 @@ impl AlertRuleBody {
         if !(0..=86_400).contains(&self.cooldown) {
             return Err("cooldown must be within 0..=86400 seconds".into());
         }
+        if !(1..=100).contains(&self.consecutive) {
+            return Err("consecutive must be within 1..=100".into());
+        }
         if !(30..=86_400).contains(&self.duration) {
             return Err("duration must be within 30..=86400 seconds".into());
         }
@@ -935,6 +1025,7 @@ impl AlertRuleBody {
             enabled: self.enabled,
             cooldown: self.cooldown,
             task_id,
+            consecutive: self.consecutive,
         })
     }
 }
@@ -1017,6 +1108,7 @@ impl ChannelBody {
             kind: self.kind,
             config: self.config,
             enabled: self.enabled,
+            failed_streak: 0,
         })
     }
 }
@@ -1051,6 +1143,7 @@ async fn list_channels(State(state): State<SharedState>) -> Response {
                         "kind": c.kind,
                         "config": crypto::redact(&c.config),
                         "enabled": c.enabled,
+                        "failed_streak": c.failed_streak,
                     })
                 })
                 .collect();
@@ -1262,6 +1355,154 @@ async fn update_billing(
         "traffic": traffic_usage,
     }))
     .into_response()
+}
+
+// ---------------------------------------------------------------- themes
+
+const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+
+fn theme_json(state: &SharedState, t: &db::ThemeRow, current: &Option<String>) -> serde_json::Value {
+    let installed = themes::theme_dir(&state.themes_root, &t.id)
+        .map(|d| d.is_dir())
+        .unwrap_or(false);
+    serde_json::json!({
+        "id": t.id,
+        "name": t.name,
+        "version": t.version,
+        "author": t.author,
+        "description": t.description,
+        "preview": t.preview,
+        "source": t.source,
+        "active": current.as_deref() == Some(t.id.as_str()),
+        "installed": installed,
+    })
+}
+
+async fn list_themes(State(state): State<SharedState>) -> Response {
+    let (rows, current) = {
+        let conn = state.db.lock().unwrap();
+        let current = db::get_setting(&conn, "current_theme").ok().flatten();
+        match db::list_themes(&conn) {
+            Ok(rows) => (rows, current),
+            Err(e) => return db_err(e),
+        }
+    };
+    let mut list: Vec<serde_json::Value> =
+        rows.iter().map(|t| theme_json(&state, t, &current)).collect();
+    // The builtin `default` theme ships on disk and must always be listed,
+    // even before an admin has uploaded anything.
+    if !rows.iter().any(|t| t.id == "default")
+        && state.themes_root.join("default").join("index.html").is_file()
+    {
+        list.insert(
+            0,
+            serde_json::json!({
+                "id": "default",
+                "name": "Default",
+                "version": env!("CARGO_PKG_VERSION"),
+                "author": "Pharus",
+                "description": null,
+                "preview": null,
+                "source": "builtin",
+                "active": current.as_deref() == Some("default"),
+                "installed": true,
+            }),
+        );
+    }
+    Json(list).into_response()
+}
+
+async fn upload_theme(
+    State(state): State<SharedState>,
+    mut multipart: Multipart,
+) -> Response {
+    let mut data: Vec<u8> = Vec::new();
+    while let Some(field) = match multipart.next_field().await {
+        Ok(f) => f,
+        Err(e) => return bad(&format!("multipart 解析失败: {e}")),
+    } {
+        if field.name() != Some("file") {
+            continue;
+        }
+        use futures_util::TryStreamExt;
+        let mut stream = field.into_stream();
+        while let Ok(Some(chunk)) = stream.try_next().await {
+            if data.len().saturating_add(chunk.len()) > MAX_UPLOAD_BYTES {
+                return bad("主题包过大");
+            }
+            data.extend_from_slice(&chunk);
+        }
+    }
+    if data.is_empty() {
+        return bad("缺少主题包文件");
+    }
+    let manifest = match themes::install_zip(&state.themes_root, &data) {
+        Ok(m) => m,
+        Err(e) => return bad(&e.to_string()),
+    };
+    let row = db::ThemeRow {
+        id: manifest.id.clone(),
+        name: manifest.name.clone(),
+        version: manifest.version,
+        author: manifest.author,
+        description: manifest.description,
+        preview: manifest.preview,
+        source: "uploaded".into(),
+        dir: format!("themes/{}", manifest.id),
+        installed_at: chrono::Utc::now().timestamp(),
+    };
+    {
+        let conn = state.db.lock().unwrap();
+        if let Err(e) = db::upsert_theme(&conn, &row) {
+            return db_err(e);
+        }
+    }
+    Json(serde_json::json!({ "id": row.id, "name": row.name, "version": row.version }))
+        .into_response()
+}
+
+async fn activate_theme(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    let Some(dir) = themes::theme_dir(&state.themes_root, &id) else {
+        return bad("非法主题 id");
+    };
+    if !dir.join("index.html").is_file() {
+        return bad("主题目录不存在或缺少 index.html");
+    }
+    {
+        let conn = state.db.lock().unwrap();
+        if let Err(e) = db::set_setting(&conn, "current_theme", &id) {
+            return db_err(e);
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn delete_theme(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    let conn = state.db.lock().unwrap();
+    let current = db::get_setting(&conn, "current_theme").ok().flatten();
+    if current.as_deref() == Some(id.as_str()) {
+        return bad("不能卸载当前激活的主题");
+    }
+    let source = match db::get_theme(&conn, &id) {
+        Ok(Some(t)) => t.source,
+        Ok(None) => {
+            if id == "default" {
+                return bad("内置主题不能卸载");
+            }
+            return err(StatusCode::NOT_FOUND, "theme not found");
+        }
+        Err(e) => return db_err(e),
+    };
+    if source == "builtin" {
+        return bad("内置主题不能卸载");
+    }
+    if let Some(dir) = themes::theme_dir(&state.themes_root, &id) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    match db::delete_theme(&conn, &id) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => db_err(e),
+    }
 }
 
 #[cfg(test)]

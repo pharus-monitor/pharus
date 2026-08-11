@@ -183,12 +183,12 @@
   function persistOrder() {
     localStorage.setItem('pharus.agentOrder', JSON.stringify(agentOrder));
     localStorage.setItem('pharus.regionOrder', JSON.stringify(regionOrder));
-    var tok = localStorage.getItem('pharus.admin');
-    if (!tok) return;
+    // Site-wide order is persisted when an admin session cookie is present.
+    // The request carries the HttpOnly cookie automatically; no token in JS.
     [['agent_order', agentOrder], ['region_order', regionOrder]].forEach(function (kv) {
       fetch('/api/admin/settings', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: kv[0], value: JSON.stringify(kv[1]) })
       }).catch(function () {});
     });
@@ -616,20 +616,15 @@
       renderHeader();
       if (meta.admin_enabled) adminLink.hidden = false;
     }).catch(function () {});
-    // Drag grips are admin-only: reveal them when a stored session is valid.
-    var tok = localStorage.getItem('pharus.admin');
-    if (tok) {
-      fetch('/api/admin/check', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + tok }
-      }).then(function (r) {
-        if (r.ok) {
-          document.body.classList.add('is-admin');
-        } else if (r.status === 401) {
-          localStorage.removeItem('pharus.admin');
-        }
-      }).catch(function () {});
-    }
+    // Drag grips are admin-only: reveal them when a session cookie is valid.
+    // Sessions are HttpOnly cookies now; purge tokens stored by older versions.
+    localStorage.removeItem('pharus.admin');
+    sessionStorage.removeItem('pharus.admin');
+    fetch('/api/admin/check', { method: 'POST' }).then(function (r) {
+      if (r.ok) {
+        document.body.classList.add('is-admin');
+      }
+    }).catch(function () {});
   }
 
   groupToggle.addEventListener('click', function () {

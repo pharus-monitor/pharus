@@ -319,18 +319,20 @@
         refs.metric = selectField('alert.metric', [
           { value: '', label: '—' }, { value: 'cpu', label: t('metric.cpu') },
           { value: 'mem', label: t('metric.mem') }, { value: 'disk', label: t('metric.disk') },
-          { value: 'load', label: t('metric.load') }, { value: 'traffic', label: t('metric.traffic') }
+          { value: 'load', label: t('metric.load') }, { value: 'traffic', label: t('metric.traffic') },
+          { value: 'loss', label: t('metric.loss') }
         ], rule.metric || 'cpu');
         refs.op = selectField('alert.op', [{ value: '>', label: '>' }, { value: '<', label: '<' }], rule.op || '>');
         refs.threshold = inputField('alert.threshold', rule.threshold == null ? 80 : rule.threshold, { type: 'number', required: true, step: 'any' });
         refs.duration = inputField('alert.duration', rule.duration == null ? 300 : rule.duration, { type: 'number', required: true, min: 1 });
         refs.ratio = inputField('alert.ratio', rule.ratio == null ? 1 : rule.ratio, { type: 'number', required: true, min: 0, max: 1, step: 0.01 });
         refs.cooldown = inputField('alert.cooldown', rule.cooldown == null ? 1800 : rule.cooldown, { type: 'number', min: 0 });
+        refs.consecutive = inputField('alert.consecutive', rule.consecutive == null ? 1 : rule.consecutive, { type: 'number', min: 1 });
         refs.taskId = selectField('alert.task', [{ value: '', label: '—' }].concat(tasks.map(function (task) {
           return { value: String(task.id), label: task.name };
         })), rule.task_id == null ? '' : String(rule.task_id));
         refs.enabled = checkboxField('common.enabled', rule.enabled !== false);
-        [refs.name, refs.kind, refs.agent, refs.metric, refs.op, refs.threshold, refs.duration, refs.ratio, refs.cooldown, refs.taskId].forEach(function (ref) { root.appendChild(ref.el); });
+        [refs.name, refs.kind, refs.agent, refs.metric, refs.op, refs.threshold, refs.duration, refs.ratio, refs.cooldown, refs.consecutive, refs.taskId].forEach(function (ref) { root.appendChild(ref.el); });
         var channelBox = fieldLabel('alert.channels');
         var selectedChannels = Array.isArray(rule.channels) ? rule.channels.map(Number) : [];
         refs.channels = [];
@@ -348,6 +350,7 @@
           refs.metric.el.hidden = kind !== 'metric';
           refs.op.el.hidden = kind === 'offline';
           refs.taskId.el.hidden = kind !== 'task';
+          refs.consecutive.el.hidden = kind !== 'task';
           refs.threshold.label.textContent = t(kind === 'offline' ? 'alert.gracePeriod' : 'alert.threshold');
         }
         refs.kind.input.addEventListener('change', updateKind);
@@ -364,6 +367,7 @@
           duration: Number(refs.duration.input.value),
           ratio: Number(refs.ratio.input.value),
           cooldown: Number(refs.cooldown.input.value),
+          consecutive: Number(refs.consecutive.input.value),
           task_id: kind === 'task' && refs.taskId.input.value ? Number(refs.taskId.input.value) : null,
           channels: refs.channels.filter(function (input) { return input.checked; }).map(function (input) { return Number(input.value); }),
           enabled: refs.enabled.input.checked
@@ -479,12 +483,19 @@
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('admin.channels'), t('channel.create'), function () { openChannelForm(null); }));
         var rows = channels.map(function (channel) {
+          var nameCell = document.createElement('span');
+          nameCell.textContent = channel.name;
+          if (channel.failed_streak > 0) {
+            var badge = node('span', 'channel-badge' + (channel.failed_streak >= 3 ? ' danger' : ''));
+            badge.textContent = t('channel.unhealthy') + '·' + channel.failed_streak;
+            nameCell.appendChild(badge);
+          }
           var actions = actionsCell();
           actions.appendChild(actionButton(t('channel.test'), function () { testChannel(channel, actions); }));
           actions.appendChild(actionButton(t('admin.edit'), function () { openChannelForm(channel); }));
           actions.appendChild(actionButton(t('admin.delete'), function () { deleteEntity('/api/admin/channels', channel.id, renderChannels); }, 'edit-btn danger'));
           actions.appendChild(node('span', 'inline-status'));
-          return [channel.name, t('channel.kind.' + channel.kind), enabledLabel(channel.enabled), actions];
+          return [nameCell, t('channel.kind.' + channel.kind), enabledLabel(channel.enabled), actions];
         });
         options.content.appendChild(makeTable([t('common.name'), t('channel.kind'), t('common.status'), t('common.actions')], rows));
       }).catch(showError);
@@ -532,16 +543,113 @@
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('admin.pingTasks'), t('pingTask.create'), function () { openPingTaskForm(null); }));
         var rows = tasks.map(function (task) {
+          var grip = node('span', 'drag-grip', '⠿');
+          grip.title = t('sort.drag');
           var target = task.target + (task.port == null ? '' : ':' + task.port);
-          return [task.label, formatScopes(task.agent_ids), task.kind.toUpperCase(), target,
+          return [grip, task.label, formatScopes(task.agent_ids), task.kind.toUpperCase(), target,
             task.interval_sec + 's', String(task.probe_count), enabledLabel(task.enabled),
             editActions(function () { openPingTaskForm(task); }, function () { deleteEntity('/api/admin/ping-tasks', task.id, renderPingTasks); })];
         });
         options.content.appendChild(makeTable([
-          t('pingTask.label'), t('common.scope'), t('pingTask.kind'), t('pingTask.target'),
+          '', t('pingTask.label'), t('common.scope'), t('pingTask.kind'), t('pingTask.target'),
           t('pingTask.interval'), t('pingTask.probeCount'), t('common.status'), t('common.actions')
         ], rows));
+        var tbody = options.content.querySelector('.admin-table tbody');
+        if (tbody) {
+          Array.from(tbody.children).forEach(function (tr, i) {
+            tr.dataset.taskId = tasks[i].id;
+          });
+          Array.from(tbody.querySelectorAll('.drag-grip')).forEach(function (grip) {
+            enableTaskRowDrag(grip, tbody);
+          });
+        }
       }).catch(showError);
+    }
+
+    /* Drag a ping-task row onto another to reorder; the order is stored in the
+       ping_task_order setting and drives agents, cards and charts. */
+    function enableTaskRowDrag(grip, tbody) {
+      grip.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      });
+      grip.addEventListener('pointerdown', function (ev) {
+        if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        var row = grip.closest('tr');
+        if (!row) return;
+        var startY = ev.clientY;
+        var dragging = false;
+        var over = null;
+        var overAfter = false;
+
+        // hit-test by distance to row centers: elementFromPoint loses rows
+        // under the sticky table header
+        function rowAtY(y) {
+          var best = null;
+          var bestDist = Infinity;
+          Array.from(tbody.children).forEach(function (tr) {
+            if (tr === row) return;
+            var r = tr.getBoundingClientRect();
+            var d = Math.abs(y - (r.top + r.height / 2));
+            if (d < bestDist) { bestDist = d; best = tr; }
+          });
+          return best;
+        }
+
+        function onMove(e) {
+          if (!dragging) {
+            if (Math.abs(e.clientY - startY) < 6) return;
+            dragging = true;
+            row.classList.add('dragging');
+            document.body.classList.add('is-dragging');
+            try { grip.setPointerCapture(ev.pointerId); } catch (err) {}
+          }
+          row.style.transform = 'translateY(' + (e.clientY - startY) + 'px)';
+          var target = rowAtY(e.clientY);
+          if (over !== target) {
+            if (over) over.classList.remove('drop-target');
+            over = target;
+            if (over) over.classList.add('drop-target');
+          }
+          if (over) {
+            var r = over.getBoundingClientRect();
+            overAfter = e.clientY > r.top + r.height / 2;
+          }
+        }
+
+        function finish(e, apply) {
+          grip.removeEventListener('pointermove', onMove);
+          grip.removeEventListener('pointerup', onUp);
+          grip.removeEventListener('pointercancel', onCancel);
+          row.style.transform = '';
+          row.classList.remove('dragging');
+          document.body.classList.remove('is-dragging');
+          if (over) over.classList.remove('drop-target');
+          if (!dragging || !apply || !over) return;
+          var id = Number(row.dataset.taskId);
+          var refId = Number(over.dataset.taskId);
+          var ids = Array.from(tbody.children)
+            .map(function (tr) { return Number(tr.dataset.taskId); })
+            .filter(function (v) { return v !== id; });
+          var idx = ids.indexOf(refId);
+          if (idx < 0) idx = ids.length; else if (overAfter) idx += 1;
+          ids.splice(idx, 0, id);
+          options.request('/api/admin/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'ping_task_order', value: JSON.stringify(ids) })
+          }).then(function () { renderPingTasks(); }).catch(showError);
+        }
+
+        function onUp(e) { finish(e, true); }
+        function onCancel(e) { finish(e, false); }
+
+        grip.addEventListener('pointermove', onMove);
+        grip.addEventListener('pointerup', onUp);
+        grip.addEventListener('pointercancel', onCancel);
+      });
     }
 
     /* ---------- Custom tasks and history ---------- */
@@ -1080,6 +1188,79 @@
       }).catch(showError);
     }
 
+    /* ---------- Themes ---------- */
+    function themeCard(theme) {
+      var card = node('div', 'theme-card' + (theme.active ? ' active' : ''));
+      var head = node('div', 'theme-card-head');
+      var name = node('div', 'theme-card-name');
+      name.appendChild(node('span', '', theme.name || theme.id));
+      if (theme.active) name.appendChild(node('span', 'theme-badge active', t('theme.active')));
+      head.appendChild(name);
+      var meta = node('div', 'theme-card-meta');
+      meta.appendChild(node('span', 'num', 'v' + (theme.version || '0.0.0')));
+      if (theme.author) meta.appendChild(node('span', '', theme.author));
+      meta.appendChild(node('span', 'theme-source', t('theme.source.' + theme.source)));
+      card.appendChild(head);
+      card.appendChild(meta);
+      if (theme.description) card.appendChild(node('p', 'theme-card-desc', theme.description));
+      if (!theme.installed) card.appendChild(node('p', 'theme-card-warn', t('theme.missing')));
+      if (!theme.active || theme.source !== 'builtin') {
+        var actions = node('div', 'theme-card-actions');
+        if (!theme.active) {
+          actions.appendChild(actionButton(t('theme.activate'), function () {
+            options.request('/api/admin/themes/' + encodeURIComponent(theme.id) + '/activate', { method: 'POST' })
+              .then(renderThemes).catch(showError);
+          }));
+        }
+        if (theme.source !== 'builtin') {
+          actions.appendChild(actionButton(t('theme.uninstall'), function () {
+            if (!window.confirm(t('admin.deleteConfirm'))) return;
+            options.request('/api/admin/themes/' + encodeURIComponent(theme.id), { method: 'DELETE' })
+              .then(renderThemes).catch(showError);
+          }, 'edit-btn danger'));
+        }
+        card.appendChild(actions);
+      }
+      return card;
+    }
+
+    function renderThemes() {
+      setLoading(); clearError();
+      options.request('/api/admin/themes').then(function (themes) {
+        if (!active || currentView !== 'themes') return;
+        themes = Array.isArray(themes) ? themes : [];
+        options.content.innerHTML = '';
+        var bar = toolbar(t('admin.themes'), t('theme.upload'), function () {
+          var input = options.content.querySelector('#theme-file');
+          if (input) input.click();
+        });
+        options.content.appendChild(bar);
+        var fileInput = node('input', '');
+        fileInput.type = 'file';
+        fileInput.id = 'theme-file';
+        fileInput.hidden = true;
+        fileInput.accept = '.zip,application/zip';
+        fileInput.addEventListener('change', function () {
+          var file = fileInput.files[0];
+          if (!file) return;
+          var fd = new FormData();
+          fd.append('file', file);
+          options.request('/api/admin/themes', { method: 'POST', body: fd })
+            .then(renderThemes)
+            .catch(showError)
+            .then(function () { fileInput.value = ''; });
+        });
+        options.content.appendChild(fileInput);
+        if (!themes.length) {
+          options.content.appendChild(node('p', 'admin-empty', t('common.noData')));
+          return;
+        }
+        var grid = node('div', 'theme-grid');
+        themes.forEach(function (theme) { grid.appendChild(themeCard(theme)); });
+        options.content.appendChild(grid);
+      }).catch(showError);
+    }
+
     function loadView() {
       if (!active) return;
       if (currentView === 'alerts') renderAlerts();
@@ -1089,6 +1270,7 @@
       else if (currentView === 'regions') renderRegions();
       else if (currentView === 'features') renderFeatures();
       else if (currentView === 'hostBilling') renderHostBilling();
+      else if (currentView === 'themes') renderThemes();
       else if (currentView === 'settings') renderSettings();
     }
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="doc.title.admin">Pharus · Admin</title>
-  <link rel="stylesheet" href="style.css?v=0.5.0" />
+  <link rel="stylesheet" href="style.css?v=0.5.1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -75,6 +75,7 @@
         <button class="admin-tab" type="button" data-admin-view="regions" data-i18n="admin.regions">区域设置</button>
         <button class="admin-tab" type="button" data-admin-view="features" data-i18n="admin.features">功能开关</button>
         <button class="admin-tab" type="button" data-admin-view="hostBilling" data-i18n="admin.hostBilling">主机账单</button>
+        <button class="admin-tab" type="button" data-admin-view="themes" data-i18n="admin.themes">主题</button>
         <button class="admin-tab" type="button" data-admin-view="settings" data-i18n="admin.settings">站点设置</button>
       </div>
       <p class="panel-message error" id="admin-error" role="alert" hidden></p>
@@ -115,7 +116,7 @@
   </div>
 
   <script src="common.js?v=0.5.0"></script>
-  <script src="admin.js?v=0.5.0"></script>
+  <script src="admin.js?v=0.5.3"></script>
   <script>
     (function () {
       'use strict';
@@ -128,17 +129,14 @@
       var loginErr = document.getElementById('login-err');
       var loginSubmit = document.getElementById('login-submit');
       var adminController = null;
-      var adminToken = null;
       var agentsMap = new Map();
 
       function adminRequest(url, options) {
         options = options || {};
-        var headers = {};
-        Object.keys(options.headers || {}).forEach(function (key) { headers[key] = options.headers[key]; });
-        headers.Authorization = 'Bearer ' + adminToken;
+        // The admin session is an HttpOnly cookie; no token is stored in JS.
         return fetch(url, {
           method: options.method || 'GET',
-          headers: headers,
+          headers: options.headers || {},
           body: options.body
         }).then(function (response) {
           return response.text().then(function (text) {
@@ -156,11 +154,9 @@
         });
       }
 
-      function checkToken(tok) {
-        return fetch('/api/admin/check', {
-          method: 'POST',
-          headers: tok ? { Authorization: 'Bearer ' + tok } : {}
-        }).then(function (r) { return r.status; }).catch(function () { return 0; });
+      function checkSession() {
+        return fetch('/api/admin/check', { method: 'POST' })
+          .then(function (r) { return r.status; }).catch(function () { return 0; });
       }
 
       function doLogin(username, password) {
@@ -173,9 +169,8 @@
         }).catch(function () { return { status: 0, body: {} }; });
       }
 
-      function enterAdmin(tok) {
-        adminToken = tok;
-        localStorage.setItem('pharus.admin', tok);
+      function enterAdmin() {
+        document.body.classList.add('is-admin');
         loginView.hidden = true;
         adminRoot.hidden = false;
         if (!adminController) {
@@ -198,8 +193,8 @@
       }
 
       function logout() {
-        adminToken = null;
-        localStorage.removeItem('pharus.admin');
+        fetch('/api/admin/logout', { method: 'POST' }).catch(function () {});
+        document.body.classList.remove('is-admin');
         if (adminController) { adminController.setVisible(false); }
         adminRoot.hidden = true;
         loginUsername.value = '';
@@ -210,6 +205,9 @@
 
       function boot() {
         P.initTheme();
+        // Sessions are HttpOnly cookies now; purge tokens stored by older versions.
+        localStorage.removeItem('pharus.admin');
+        sessionStorage.removeItem('pharus.admin');
         // keep a live agent list so feature/region choices can reflect current state
         P.connectStream(function (msg) {
           if (msg.type === 'snapshot') {
@@ -237,16 +235,9 @@
             disabledView.hidden = false;
             return;
           }
-          var saved = localStorage.getItem('pharus.admin');
-          if (!saved) {
-            loginView.hidden = false;
-            loginUsername.focus();
-            return;
-          }
-          checkToken(saved).then(function (st) {
-            if (st === 200) enterAdmin(saved);
+          checkSession().then(function (st) {
+            if (st === 200) enterAdmin();
             else {
-              localStorage.removeItem('pharus.admin');
               loginView.hidden = false;
               loginUsername.focus();
             }
@@ -261,8 +252,8 @@
         loginSubmit.disabled = true;
         doLogin(u, p).then(function (res) {
           loginSubmit.disabled = false;
-          if (res.status === 200 && res.body && res.body.token) {
-            enterAdmin(res.body.token);
+          if (res.status === 200) {
+            enterAdmin();
           } else {
             loginErr.textContent = P.t('admin.unauthorized');
             loginErr.hidden = false;

@@ -235,6 +235,9 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             if let Err(e) = crate::db::replace_streaming(&db, agent_id, &results) {
                                 warn!(agent_id, error = %e, "streaming result save failed");
                             }
+                            if let Err(e) = crate::db::append_streaming_history(&db, agent_id, &results) {
+                                warn!(agent_id, error = %e, "streaming history save failed");
+                            }
                         }
                         {
                             let mut agents = state.agents.write().unwrap();

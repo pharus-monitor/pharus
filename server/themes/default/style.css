@@ -157,6 +157,9 @@ body.is-dragging { user-select: none; -webkit-user-select: none; }
   box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
 }
 .drop-target { outline: 2px dashed var(--beacon-300, #fbbf24); outline-offset: 3px; border-radius: 12px; }
+tr.dragging { position: relative; z-index: 30; opacity: 0.85; background: var(--bg-surface-hover); pointer-events: none; }
+tr.drop-target { outline: 2px dashed var(--beacon-300, #fbbf24); outline-offset: -2px; border-radius: 0; }
+tr.drop-target td { border-top-color: transparent; }
 .view-toggle[aria-pressed="true"] { color: var(--beacon-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08); }
 .view-toggle-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
@@ -461,6 +464,31 @@ body.is-dragging { user-select: none; -webkit-user-select: none; }
 .inline-status { margin: 0.35rem 0 0; font-size: 10px; color: var(--text-muted); }
 .inline-status.ok { color: var(--ok); }
 .inline-status.error { color: #f87171; }
+.channel-badge { margin-left: 0.45rem; padding: 0.1rem 0.4rem; border-radius: 999px; background: rgba(251, 191, 36, 0.12); color: var(--beacon-300); font-size: 9px; font-weight: 600; vertical-align: middle; white-space: nowrap; }
+.channel-badge.danger { background: rgba(248, 113, 113, 0.14); color: #f87171; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.875rem; margin-top: 1rem; }
+.theme-card { display: flex; flex-direction: column; gap: 0.45rem; padding: 1rem 1.1rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-surface); transition: border-color 0.3s; }
+.theme-card:hover { border-color: var(--border-strong); }
+.theme-card.active { border-color: rgba(251, 191, 36, 0.45); box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.2); }
+.theme-card-head { display: flex; align-items: center; gap: 0.5rem; }
+.theme-card-name { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.theme-badge.active { padding: 0.1rem 0.45rem; border-radius: 999px; background: rgba(52, 211, 153, 0.14); color: var(--ok); font-size: 9px; font-weight: 600; }
+.theme-card-meta { display: flex; align-items: center; gap: 0.6rem; font-size: 11px; color: var(--text-muted); }
+.theme-source { padding: 0.05rem 0.4rem; border-radius: 999px; background: var(--abyss-850); border: 1px solid var(--border-subtle); font-size: 9px; }
+.theme-card-desc { margin: 0; font-size: 11px; color: var(--text-secondary); }
+.theme-card-warn { margin: 0; font-size: 11px; color: var(--beacon-300); }
+.theme-card-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: auto; }
+.streaming-history { margin-top: 1rem; border-top: 1px solid var(--border-subtle); padding-top: 0.75rem; }
+.streaming-history-title { margin: 0 0 0.4rem; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.streaming-history-list { margin: 0; padding: 0; list-style: none; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.streaming-history-list li { display: flex; align-items: center; gap: 0.6rem; padding: 3px 6px; border-radius: 6px; font-size: 11px; }
+.streaming-history-list li:nth-child(odd) { background: rgba(148, 163, 184, 0.05); }
+.streaming-history-service { color: var(--text-primary); min-width: 9rem; }
+.streaming-history-time { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.streaming-history-status { margin-left: auto; font-size: 10px; }
+.streaming-history-status.ok { color: var(--ok); }
+.streaming-history-status.fail { color: #f87171; }
+.streaming-history-status.no { color: var(--text-muted); }
 .rule-explain { margin: 0.75rem 0; padding: 0.7rem 0.8rem; border-left: 2px solid var(--beacon-500); border-radius: 0 var(--radius-md) var(--radius-md) 0; background: rgba(251, 191, 36, 0.06); color: var(--text-secondary); font-size: 11px; }
 .feature-defaults { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; margin-top: 0.75rem; }
 .settings-stack { display: flex; flex-direction: column; gap: 0.65rem; margin-top: 0.75rem; }
