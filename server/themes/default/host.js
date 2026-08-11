@@ -523,8 +523,7 @@
       if (last) {
         var curRtt = Number(last.rtt_avg);
         var curLoss = Math.max(0, Math.min(1, Number(last.loss) || 0));
-        name += ' · ' + formatChartTime(Number(last.ts))
-          + ' · ' + (Number.isFinite(curRtt) ? curRtt.toFixed(1) + ' ms' : '—')
+        name += ' · ' + (Number.isFinite(curRtt) ? curRtt.toFixed(1) + ' ms' : '—')
           + ' · ' + Math.round(curLoss * 100) + '% ' + t('ping.lossShort');
       }
       label.textContent = name;
