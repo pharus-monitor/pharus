@@ -1196,7 +1196,8 @@
   });
   [tokenModal, editModal, entityModal].forEach(function (mask) {
     mask.addEventListener('click', function (ev) {
-      if (ev.target === mask || ev.target.hasAttribute('data-close')) mask.hidden = true;
+      // only explicit close controls dismiss a modal; the backdrop does not
+      if (ev.target.hasAttribute('data-close')) mask.hidden = true;
     });
   });
   document.addEventListener('keydown', function (ev) {

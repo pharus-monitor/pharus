@@ -1213,7 +1213,9 @@
   });
   [tokenModal, editModal, atModal, renameModal].forEach(function (mask) {
     mask.addEventListener('click', function (ev) {
-      if (ev.target === mask || ev.target.hasAttribute('data-close')) mask.hidden = true;
+      // only explicit close controls dismiss a modal; clicking the backdrop
+      // outside the dialog keeps it open
+      if (ev.target.hasAttribute('data-close')) mask.hidden = true;
     });
   });
   document.addEventListener('keydown', function (ev) {

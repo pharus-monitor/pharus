@@ -91,8 +91,18 @@
         }
       });
     }
+    var downX = 0;
+    var downY = 0;
+    node.addEventListener('mousedown', function (ev) {
+      downX = ev.clientX;
+      downY = ev.clientY;
+    });
     node.addEventListener('click', function (ev) {
       if (ev.target.closest('button')) return;
+      // a drag that selected text ends in a click — copying must not navigate
+      if (Math.abs(ev.clientX - downX) + Math.abs(ev.clientY - downY) > 6) return;
+      var sel = window.getSelection();
+      if (sel && String(sel).length > 0) return;
       openHost(id);
     });
     cards.set(id, card);
