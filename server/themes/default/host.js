@@ -691,8 +691,10 @@
      Hosts wider than the column wrap onto indented continuation lines, with
      the stats columns on the last line so alignment never breaks. */
   function renderMtrTable(request, hops) {
-    var COLS = 27;
-    var rows = [mtrPad('Host', COLS) + 'Loss%   Snt   Last    Avg   Best   Wrst  StDev'];
+    var COLS = 30;
+    var rows = [mtrPad('Host', COLS)
+      + mtrPad('Loss%', 7) + mtrPad('Snt', 6) + mtrPad('Last', 7)
+      + mtrPad('Avg', 7) + mtrPad('Best', 7) + mtrPad('Wrst', 7) + 'StDev'];
     hops.forEach(function (h) {
       var prefix = h.hop + '.|-- ';
       var host = h.host || '???';
