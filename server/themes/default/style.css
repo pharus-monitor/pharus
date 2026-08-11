@@ -137,6 +137,7 @@ body::before {
   padding: 4px 10px; border-radius: 999px;
   border: 1px solid var(--border-subtle); background: none;
   color: var(--text-muted); font: inherit; font-size: 11px; cursor: pointer;
+  white-space: nowrap;
   transition: color 0.2s, border-color 0.2s, background 0.2s;
 }
 .view-toggle:hover { color: var(--text-primary); border-color: var(--border-strong); }
@@ -224,6 +225,7 @@ tr.drop-target td { border-top-color: transparent; }
 
 .card {
   position: relative;
+  overflow: hidden;
   padding: 1.25rem;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
