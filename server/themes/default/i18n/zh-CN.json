@@ -206,7 +206,7 @@
   "billing.traffic": "周期流量",
   "billing.expires": "到期时间",
   "billing.expired": "已到期",
-  "billing.daysLeft": "剩 {n} 天",
+  "billing.daysLeft": "剩{n}天",
   "billing.price": "价格",
   "billing.resetDay": "重置日",
   "billing.cycle.monthly": "月付",

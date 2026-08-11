@@ -206,7 +206,7 @@
   "billing.traffic": "周期トラフィック",
   "billing.expires": "期限",
   "billing.expired": "期限切れ",
-  "billing.daysLeft": "残り {n} 日",
+  "billing.daysLeft": "残り{n}日",
   "billing.price": "価格",
   "billing.resetDay": "リセット日",
   "billing.cycle.monthly": "月払い",
