@@ -331,6 +331,9 @@ body.is-dragging { user-select: none; -webkit-user-select: none; }
 /* ---------- Billing section ---------- */
 .stat-cost { color: var(--beacon-300); font-size: 18px; padding-top: 3px; }
 .billing-kv { margin-top: 0.75rem; }
+/* the expiry value ("2026-09-10 · 剩 30 天") needs the full row */
+.billing-kv .kv:first-child { grid-column: 1 / -1; }
+.billing-kv .kv:first-child .v { white-space: nowrap; }
 .billing-edit-kv { justify-content: flex-end; }
 .meter-fill.traffic { background: linear-gradient(90deg, var(--emerald-400), var(--sky-400)); box-shadow: 0 0 8px rgba(52, 211, 153, 0.35); }
 .meter-fill.warn { background: linear-gradient(90deg, var(--beacon-500), var(--beacon-400)); box-shadow: 0 0 8px rgba(251, 191, 36, 0.35); }
