@@ -524,7 +524,7 @@ fn extract_detail(body: &str, key: &str) -> Option<String> {
     // matches both `"key":"XX"` and `key=XX`
     for (idx, _) in body.match_indices(key) {
         let rest = &body[idx + key.len()..];
-        let rest = rest.trim_start_matches(['"', '=']);
+        let rest = rest.trim_start_matches(['"', '=', ':', ' ']);
         let end = rest
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
             .unwrap_or(rest.len());
@@ -543,9 +543,34 @@ async fn run_unlock_checks(
     for c in UNLOCK_CHECKS {
         let result = async {
             let resp = client.get(c.url).send().await?;
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            Ok::<(u16, String), reqwest::Error>((status.as_u16(), body))
+            let status = resp.status().as_u16();
+            if c.want_substr.is_none() && c.detail_key.is_none() {
+                // status-only check: drop the connection instead of pulling a
+                // ~600 KiB HTML body we never read (keeps probes lightweight)
+                drop(resp);
+                return Ok::<(u16, String), reqwest::Error>((status, String::new()));
+            }
+            // read only until the marker AND its detail value are complete
+            let mut resp = resp;
+            let mut body = String::new();
+            loop {
+                if body.len() >= 1_048_576 {
+                    break;
+                }
+                let marker_hit = c.want_substr.map(|m| body.contains(m)).unwrap_or(false);
+                if marker_hit {
+                    let detail_done =
+                        c.detail_key.map(|k| extract_detail(&body, k).is_some()).unwrap_or(true);
+                    if detail_done {
+                        break;
+                    }
+                }
+                match resp.chunk().await? {
+                    Some(bytes) => body.push_str(&String::from_utf8_lossy(&bytes)),
+                    None => break,
+                }
+            }
+            Ok((status, body))
         }
         .await;
         let r = match result {
