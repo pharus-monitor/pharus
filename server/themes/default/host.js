@@ -710,8 +710,10 @@
      hosts wider than the column wrap onto indented continuation lines. */
   function renderMtrTable(request, hops) {
     var charW = mtrCharWidth(request.output);
-    var total = Math.max(62, Math.floor(request.output.clientWidth / charW) - 1);
-    var COLS = Math.max(26, Math.min(44, total - 56));
+    // -8 chars guards the box padding and the vertical scrollbar; 92 caps the
+    // total so wide panels never blow past the visible area.
+    var total = Math.max(62, Math.min(92, Math.floor(request.output.clientWidth / charW) - 8));
+    var COLS = Math.max(26, Math.min(36, total - 56));
     var rows = [mtrPad('Host', COLS)
       + mtrPadL('Loss%', 8) + mtrPadL('Snt', 8) + mtrPadL('Last', 8)
       + mtrPadL('Avg', 8) + mtrPadL('Best', 8) + mtrPadL('Wrst', 8) + mtrPadL('StDev', 8)];
