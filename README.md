@@ -8,7 +8,7 @@ A lightweight server monitoring system written in Rust.
 
 [简体中文](README.zh-CN.md)
 
-## Features (MVP)
+## Features
 
 - **Full Rust stack**: agent idles at 1–3 MB RSS, no GC pauses
 - **Single binary**: zero runtime dependencies, statically linked (musl) for any VPS
@@ -17,9 +17,13 @@ A lightweight server monitoring system written in Rust.
 - **Theme system**: the whole frontend is a swappable template (`themes/` + `current_theme`)
 - **Multilingual UI**: English / 中文 / 日本語 / Русский, auto-matched to browser language
 - **Reconnect & offline detection**: exponential backoff 1s→30s; offline after 15s silence
-
-Roadmap (phase 2+): Ping/TCPing monitoring, custom script tasks, Looking Glass /
-MTR / iperf3, alert notifications, streaming-unlock checks, theme store.
+- **Ping monitoring**: ICMP / TCP / HTTP probe tasks on schedules, with per-host latency & loss history charts (hover a curve to read it out)
+- **Live network diagnostics**: Looking Glass (ping / traceroute), a live-updating MTR table, and iperf3 bandwidth tests — streamed from the agent to the browser
+- **Streaming-unlock checks**: periodic Netflix / YouTube Premium / Disney+ / ChatGPT availability per host
+- **Alert rules**: metric / host-offline / task-failure rules with evaluation windows, sample ratios and cooldowns; notifies via Bark, DingTalk, Discord, Email, Feishu, Telegram, Webhook or WeCom
+- **Region grouping & drag reorder**: group host cards by region, drag cards and groups into your own order — saved server-side so every visitor sees the same layout
+- **Admin console**: username/password login, billing management, ping tasks, custom script tasks, alert rules, channels, regions, feature toggles
+- **Privacy by default**: host IPs are masked on the public dashboard, and the first hop (gateway) is hidden in MTR/traceroute output
 
 ## Architecture
 
@@ -73,7 +77,8 @@ Both binaries accept CLI flags and environment variables:
 | `PHARUS_SERVER` | Agent server URL | — |
 | `PHARUS_TOKEN` | Agent token | — |
 | `PHARUS_INTERVAL` | Report interval (seconds) | `3` |
-| `PHARUS_ADMIN_TOKEN` | Admin API token for billing management (disabled if unset) | — |
+| `PHARUS_ADMIN_USER` | Admin console username | `admin` |
+| `PHARUS_ADMIN_PASSWORD` | Admin console password (admin API disabled if unset) | — |
 
 The agent also supports a TOML config file (`--config agent.toml`):
 
@@ -119,9 +124,10 @@ agent reboots don't lose usage. The cycle reset boundary and expiry dates are
 interpreted in the server's local timezone. Agents from v0.0.x don't report
 counters and simply show no traffic data.
 
-Set `PHARUS_ADMIN_TOKEN` on the server to enable the admin API, then click the
-gear icon in the dashboard header to edit each agent. Without it the admin API
-returns 404 and the dashboard stays read-only.
+Set `PHARUS_ADMIN_PASSWORD` on the server, then open `admin.html` (linked from the
+dashboard header) and sign in to manage billing, tasks, alerts, regions and
+feature toggles. Without it the admin API stays disabled and the dashboard is
+read-only.
 
 > Billing fields are visible on the public dashboard, like everything else.
 > If prices are sensitive, put the whole site behind a reverse proxy with auth.
@@ -130,9 +136,9 @@ returns 404 and the dashboard stays read-only.
 
 Shared message types live in the `common/` crate, JSON over WebSocket:
 
-- `AgentMsg`: `auth` / `sys_info` / `metrics`
-- `ServerToAgentMsg`: `auth_ok` / `auth_fail`
-- `BrowserMsg`: `snapshot` / `metrics` / `status`
+- `AgentMsg`: `auth` / `sys_info` / `metrics` / `ping` / `task_result` / `unlock` / `cmd_output` / `mtr_result` / `region`
+- `ServerToAgentMsg`: `auth_ok` / `auth_fail` / `run_task` / task & feature sync
+- `BrowserMsg`: `snapshot` / `metrics` / `status` / `billing` / `pings` / `unlock` / `diag_result` / `region_update` / `features_update`
 
 ## License
 

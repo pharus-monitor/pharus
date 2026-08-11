@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-## 特性（MVP）
+## 特性
 
 - **Rust 全栈**：Agent 常驻内存 1–3MB 级别，无 GC 停顿
 - **单二进制**：无运行时依赖，musl 静态链接，适配各种 VPS
@@ -16,9 +16,13 @@
 - **主题系统**：前端整模板可替换，`themes/` 加载 + `current_theme` 切换
 - **多语言界面**：English / 中文 / 日本語 / Русский，自动匹配浏览器语言
 - **断线重连**：指数退避 1s 到 30s 封顶；15s 无上报判定离线
-
-路线图（二期/进阶）：Ping/TCPing 动态监控、自定义任务、Looking Glass / MTR / iperf3、
-告警通知、流媒体解锁检测、主题商店等，详见设计大纲。
+- **Ping 监控**：ICMP / TCP / HTTP 定时探测任务，延迟与丢包历史曲线（悬停即可读出任一点的数值）
+- **实时网络诊断**：Looking Glass（ping / 路由追踪）、逐行刷新的 MTR 动态表格、iperf3 带宽测速——结果从 agent 实时流入浏览器
+- **流媒体解锁检测**：定时检测 Netflix / YouTube Premium / Disney+ / ChatGPT 可用性
+- **告警规则**：指标 / 主机离线 / 任务失败三类规则，支持评估窗口、样本比例与冷却时间；通知渠道覆盖 Bark、钉钉、Discord、邮件、飞书、Telegram、Webhook、企业微信
+- **区域分组与拖拽排序**：按地区分组展示，卡片与分组均可拖拽排序，顺序保存在服务端，所有访客看到同一布局
+- **管理后台**：账号密码登录，管理账单、探测任务、自定义脚本任务、告警、渠道、区域与功能开关
+- **默认保护隐私**：公开面板上的主机 IP 打码显示，MTR/路由追踪隐藏第一跳（网关）地址
 
 ## 架构
 
@@ -71,7 +75,8 @@ Server 与 Agent 均支持命令行参数与环境变量：
 | `PHARUS_SERVER` | Agent 连接地址 | — |
 | `PHARUS_TOKEN` | Agent 令牌 | — |
 | `PHARUS_INTERVAL` | 上报间隔（秒） | `3` |
-| `PHARUS_ADMIN_TOKEN` | 账单管理 API 的 Token（不设置则关闭） | — |
+| `PHARUS_ADMIN_USER` | 管理后台用户名 | `admin` |
+| `PHARUS_ADMIN_PASSWORD` | 管理后台密码（不设置则管理 API 关闭） | — |
 
 Agent 也支持 TOML 配置文件（`--config agent.toml`）：
 
@@ -113,8 +118,8 @@ docker compose --profile agent up -d    # 同机跑 agent（可选）
 周期重置边界与到期日均按 **server 本地时区** 解释。v0.0.x 旧版 agent
 不上报计数器，仅无流量数据，其余功能不受影响。
 
-在 server 上设置 `PHARUS_ADMIN_TOKEN` 后，点击面板右上角的齿轮图标即可
-进入管理模式编辑每台机器。未设置时管理 API 返回 404，面板保持只读。
+在 server 上设置 `PHARUS_ADMIN_PASSWORD` 后，打开 `admin.html`（面板右上角有入口）
+登录即可管理账单、任务、告警、区域与功能开关。未设置时管理 API 保持关闭，面板只读。
 
 > 账单信息在公开面板上可见（与其他数据一致）。价格敏感时请将整站置于
 > 带鉴权的反向代理之后。
@@ -123,9 +128,9 @@ docker compose --profile agent up -d    # 同机跑 agent（可选）
 
 两端共享的消息结构定义在 `common/` crate，JSON over WebSocket：
 
-- `AgentMsg`：`auth` / `sys_info` / `metrics`
-- `ServerToAgentMsg`：`auth_ok` / `auth_fail`
-- `BrowserMsg`：`snapshot` / `metrics` / `status`
+- `AgentMsg`：`auth` / `sys_info` / `metrics` / `ping` / `task_result` / `unlock` / `cmd_output` / `mtr_result` / `region`
+- `ServerToAgentMsg`：`auth_ok` / `auth_fail` / `run_task` / 任务与开关同步
+- `BrowserMsg`：`snapshot` / `metrics` / `status` / `billing` / `pings` / `unlock` / `diag_result` / `region_update` / `features_update`
 
 ## License
 
