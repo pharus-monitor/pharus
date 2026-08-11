@@ -682,29 +682,49 @@
     return s;
   }
 
+  function mtrPadL(value, width) {
+    var s = String(value);
+    while (s.length < width) s = ' ' + s;
+    return s;
+  }
+
+  var mtrCharW = 0;
+  function mtrCharWidth(el) {
+    if (mtrCharW) return mtrCharW;
+    var probe = document.createElement('span');
+    probe.style.visibility = 'hidden';
+    probe.textContent = '00000000000000000000000000000000000000000000000000';
+    el.appendChild(probe);
+    mtrCharW = probe.getBoundingClientRect().width / 50 || 7.2;
+    el.removeChild(probe);
+    return mtrCharW;
+  }
+
   function mtrNum(value) {
     var n = Number(value);
     return Number.isFinite(n) ? n.toFixed(1) : '0.0';
   }
 
   /* Renders hops like the live `mtr` curses table, rebuilt on each snapshot.
-     Hosts wider than the column wrap onto indented continuation lines, with
-     the stats columns on the last line so alignment never breaks. */
+     The stats columns spread right-aligned across the terminal's real width;
+     hosts wider than the column wrap onto indented continuation lines. */
   function renderMtrTable(request, hops) {
-    var COLS = 30;
+    var charW = mtrCharWidth(request.output);
+    var total = Math.max(62, Math.floor(request.output.clientWidth / charW) - 1);
+    var COLS = Math.max(26, Math.min(44, total - 56));
     var rows = [mtrPad('Host', COLS)
-      + mtrPad('Loss%', 7) + mtrPad('Snt', 6) + mtrPad('Last', 7)
-      + mtrPad('Avg', 7) + mtrPad('Best', 7) + mtrPad('Wrst', 7) + 'StDev'];
+      + mtrPadL('Loss%', 8) + mtrPadL('Snt', 8) + mtrPadL('Last', 8)
+      + mtrPadL('Avg', 8) + mtrPadL('Best', 8) + mtrPadL('Wrst', 8) + mtrPadL('StDev', 8)];
     hops.forEach(function (h) {
       var prefix = h.hop + '.|-- ';
       var host = h.host || '???';
-      var stats = mtrPad(((Number(h.loss) || 0) * 100).toFixed(1) + '%', 7)
-        + mtrPad(h.sent || 0, 6)
-        + mtrPad(mtrNum(h.last), 7)
-        + mtrPad(mtrNum(h.avg), 7)
-        + mtrPad(mtrNum(h.best), 7)
-        + mtrPad(mtrNum(h.worst), 7)
-        + mtrNum(h.stdev);
+      var stats = mtrPadL(((Number(h.loss) || 0) * 100).toFixed(1) + '%', 8)
+        + mtrPadL(h.sent || 0, 8)
+        + mtrPadL(mtrNum(h.last), 8)
+        + mtrPadL(mtrNum(h.avg), 8)
+        + mtrPadL(mtrNum(h.best), 8)
+        + mtrPadL(mtrNum(h.worst), 8)
+        + mtrPadL(mtrNum(h.stdev), 8);
       var parts = [host.slice(0, COLS - prefix.length)];
       var rest = host.slice(COLS - prefix.length);
       while (rest.length) {
