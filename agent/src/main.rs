@@ -246,6 +246,11 @@ async fn tcp_rtt(host: &str, port: u16) -> Option<f64> {
     let addr = format!("{host}:{port}");
     match tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(&addr)).await {
         Ok(Ok(_)) => Some(start.elapsed().as_secs_f64() * 1000.0),
+        // An RST means the host answered — reachable, port closed. tcping and
+        // the blackbox exporter both count this as a received probe.
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            Some(start.elapsed().as_secs_f64() * 1000.0)
+        }
         _ => None,
     }
 }
