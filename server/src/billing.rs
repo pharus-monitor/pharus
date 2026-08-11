@@ -2,6 +2,25 @@ use crate::state::TrafficState;
 use chrono::{DateTime, Datelike, TimeZone};
 use pharus_common::{BillingInfo, Metrics};
 
+/// Current billing-cycle traffic usage as a percentage of the quota
+/// (0..=100+), honoring the per-host uni/bidirectional pick. `None` when no
+/// quota is configured.
+pub fn usage_percent(billing: &BillingInfo, traffic: &TrafficState) -> Option<f64> {
+    let quota = billing.quota_bytes?;
+    if quota == 0 {
+        return None;
+    }
+    let used = match billing.traffic_mode.as_deref() {
+        Some("uni") => match billing.traffic_dir.as_deref() {
+            Some("up") => traffic.tx_bytes,
+            Some("max") => traffic.rx_bytes.max(traffic.tx_bytes),
+            _ => traffic.rx_bytes,
+        },
+        _ => traffic.rx_bytes.saturating_add(traffic.tx_bytes),
+    };
+    Some(used as f64 / quota as f64 * 100.0)
+}
+
 pub fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,

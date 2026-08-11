@@ -820,12 +820,13 @@
     function renderFeatures() {
       setLoading(); clearError();
       Promise.all([options.request('/api/admin/features'), loadAgents()]).then(function (values) {
-        var defaults = values[0] || {};
+        var defaults = (values[0] && values[0].features) || {};
+        var globalPct = (values[0] && values[0].iperf3_traffic_disable_pct) || '';
         return Promise.all(adminAgents.map(function (agent) {
           return options.request('/api/admin/agents/' + agent.agent_id + '/features').then(function (detail) {
             return { agent: agent, detail: detail || {} };
           });
-        })).then(function (details) { return { defaults: defaults, details: details }; });
+        })).then(function (details) { return { defaults: defaults, globalPct: globalPct, details: details }; });
       }).then(function (data) {
         if (!active || currentView !== 'features') return;
         options.content.innerHTML = '';
@@ -838,9 +839,13 @@
           defaultsRoot.appendChild(check.el);
           defaultInputs[feature] = check.input;
         });
+        var globalPctField = inputField('feature.iperf3TrafficPct', data.globalPct, { type: 'number', min: 1, max: 100 });
+        defaultsRoot.appendChild(globalPctField.el);
         var saveDefaults = actionButton(t('admin.save'), function () {
-          var body = {};
-          FEATURE_NAMES.forEach(function (feature) { body[feature] = defaultInputs[feature].checked; });
+          var body = { features: {} };
+          FEATURE_NAMES.forEach(function (feature) { body.features[feature] = defaultInputs[feature].checked; });
+          var pct = globalPctField.input.value.trim();
+          body.iperf3_traffic_disable_pct = pct === '' ? null : Number(pct);
           saveDefaults.disabled = true;
           defaultStatus.textContent = t('common.saving');
           options.request('/api/admin/features', {
@@ -874,6 +879,18 @@
             wrap.appendChild(node('p', 'inline-status', effective.indexOf(feature) !== -1 ? t('common.effectiveOn') : t('common.effectiveOff')));
             cells.push(wrap);
           });
+          // Per-agent iperf3 traffic-disable threshold. Empty = inherit the
+          // global value (shown as placeholder); a number overrides it.
+          var pctInput = node('input');
+          pctInput.type = 'number';
+          pctInput.min = 1;
+          pctInput.max = 100;
+          pctInput.placeholder = item.detail.iperf3_traffic_disable_pct == null ? '' : String(item.detail.iperf3_traffic_disable_pct);
+          pctInput.value = item.detail.iperf3_traffic_disable_pct_override == null ? '' : String(item.detail.iperf3_traffic_disable_pct_override);
+          pctInput.title = t('feature.iperf3TrafficHint');
+          var pctWrap = node('div');
+          pctWrap.appendChild(pctInput);
+          cells.push(pctWrap);
           var actions = actionsCell();
           var status = node('span', 'inline-status');
           var save = actionButton(t('admin.save'), function () {
@@ -881,6 +898,8 @@
             FEATURE_NAMES.forEach(function (feature) {
               body.overrides[feature] = selects[feature].value === '' ? null : selects[feature].value === 'true';
             });
+            var p = pctInput.value.trim();
+            body.iperf3_traffic_disable_pct = p === '' ? null : Number(p);
             save.disabled = true;
             status.textContent = t('common.saving');
             options.request('/api/admin/agents/' + item.agent.agent_id + '/features', {
@@ -898,7 +917,7 @@
         });
         options.content.appendChild(makeTable([t('common.agent')].concat(FEATURE_NAMES.map(function (feature) {
           return t('feature.' + feature);
-        })).concat([t('common.actions')]), rows));
+        })).concat([t('feature.iperf3TrafficPct')]).concat([t('common.actions')]), rows));
       }).catch(showError);
     }
 

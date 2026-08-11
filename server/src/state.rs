@@ -67,15 +67,66 @@ pub struct AppState {
     /// Active admin sessions: session token -> (username, creation time).
     /// In-memory only, lost on restart; admins must re-login.
     pub sessions: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// Per-client failed-login counters for brute-force throttling.
+    pub login_failures: Mutex<HashMap<String, LoginThrottle>>,
     /// Pending one-shot waiters for task results keyed by task_id.
     pub task_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<pharus_common::AgentMsg>>>,
     /// In-flight browser-initiated diagnostics keyed by request_id.
     pub diag_pending: Mutex<HashMap<String, crate::diag::DiagPending>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LoginThrottle {
+    pub failures: u32,
+    pub window_start: std::time::Instant,
+}
+
+impl Default for LoginThrottle {
+    fn default() -> Self {
+        Self {
+            failures: 0,
+            window_start: std::time::Instant::now(),
+        }
+    }
+}
+
 impl AppState {
     pub fn broadcast(&self, msg: BrowserMsg) {
         let _ = self.browser_tx.send(msg);
+    }
+
+    /// Build a snapshot for `agent_id`, dropping `iperf3` from `features` when
+    /// the agent's traffic usage has breached its auto-disable threshold, so
+    /// the UI hides the control in addition to the endpoint refusing requests.
+    pub fn snapshot_with_gates(&self, agent_id: i64) -> AgentSnapshot {
+        let snapshot = {
+            let agents = self.agents.read().unwrap();
+            match agents.get(&agent_id) {
+                Some(a) => a.snapshot(agent_id),
+                None => AgentSnapshot {
+                    agent_id,
+                    name: format!("Agent #{agent_id}"),
+                    online: false,
+                    info: None,
+                    data: None,
+                    billing: None,
+                    traffic: None,
+                    pings: Vec::new(),
+                    unlock: Vec::new(),
+                    region: None,
+                    features: Vec::new(),
+                },
+            }
+        };
+        if snapshot.features.iter().any(|f| f == "iperf3")
+            && crate::features::iperf3_blocked(self, agent_id)
+        {
+            let mut snap = snapshot;
+            snap.features.retain(|f| f != "iperf3");
+            snap
+        } else {
+            snapshot
+        }
     }
 
     /// Push an agent's current scheduled ping + custom task set over its live

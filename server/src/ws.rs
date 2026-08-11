@@ -186,11 +186,9 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                         // info and reported IPs even when they arrive after
                         // the initial connection snapshot.
                         let agents_list = {
-                            let agents = state.agents.read().unwrap();
-                            agents
-                                .iter()
-                                .map(|(id, a)| a.snapshot(*id))
-                                .collect::<Vec<_>>()
+                            let ids: Vec<i64> =
+                                state.agents.read().unwrap().keys().copied().collect();
+                            ids.iter().map(|id| state.snapshot_with_gates(*id)).collect::<Vec<_>>()
                         };
                         state.broadcast(BrowserMsg::Snapshot { agents: agents_list });
                     }
@@ -382,8 +380,8 @@ pub async fn handle_browser_socket(state: SharedState, socket: WebSocket) {
     let (mut write, mut read) = socket.split();
 
     let snapshot = {
-        let agents = state.agents.read().unwrap();
-        let list: Vec<AgentSnapshot> = agents.iter().map(|(id, a)| a.snapshot(*id)).collect();
+        let ids: Vec<i64> = state.agents.read().unwrap().keys().copied().collect();
+        let list: Vec<AgentSnapshot> = ids.iter().map(|id| state.snapshot_with_gates(*id)).collect();
         BrowserMsg::Snapshot { agents: list }
     };
     if write

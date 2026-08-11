@@ -397,6 +397,10 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_setting(conn: &Connection, key: &str) -> Result<usize> {
+    Ok(conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?)
+}
+
 pub fn count_users(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?)
 }

@@ -206,7 +206,73 @@ pub struct LoginBody {
     pub password: String,
 }
 
+/// Brute-force throttle: an IP that fails too many logins inside the window is
+/// refused until the window elapses. X-Forwarded-For is trusted (set by the
+/// reverse proxy) so all browsers behind Caddy/Nginx share one counter per
+/// visitor rather than one counter for the whole proxy.
+const MAX_LOGIN_FAILURES: u32 = 10;
+const LOGIN_WINDOW: Duration = Duration::from_secs(300);
+
+fn client_ip(req: &Request) -> String {
+    if let Some(xff) = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(first) = xff
+            .split(',')
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return first.to_string();
+        }
+    }
+    req.extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn login_attempt_blocked(state: &SharedState, ip: &str) -> bool {
+    let mut throttles = state.login_failures.lock().unwrap();
+    throttles.retain(|_, t| t.window_start.elapsed() <= LOGIN_WINDOW);
+    let throttle = throttles.entry(ip.to_string()).or_default();
+    if throttle.window_start.elapsed() > LOGIN_WINDOW {
+        *throttle = crate::state::LoginThrottle::default();
+    }
+    throttle.failures >= MAX_LOGIN_FAILURES
+}
+
+fn record_login_failure(state: &SharedState, ip: &str) -> Response {
+    let mut throttles = state.login_failures.lock().unwrap();
+    let throttle = throttles.entry(ip.to_string()).or_default();
+    if throttle.window_start.elapsed() > LOGIN_WINDOW {
+        *throttle = crate::state::LoginThrottle::default();
+    }
+    throttle.failures += 1;
+    if throttle.failures >= MAX_LOGIN_FAILURES {
+        err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed logins, try again later",
+        )
+    } else {
+        err(StatusCode::UNAUTHORIZED, "invalid credentials")
+    }
+}
+
+fn clear_login_failures(state: &SharedState, ip: &str) {
+    state.login_failures.lock().unwrap().remove(ip);
+}
+
 async fn login(State(state): State<SharedState>, req: Request) -> Response {
+    let ip = client_ip(&req);
+    if login_attempt_blocked(&state, &ip) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed logins, try again later",
+        );
+    }
     let (parts, body) = req.into_parts();
     let secure = parts.uri.scheme_str() == Some("https")
         || parts
@@ -228,11 +294,12 @@ async fn login(State(state): State<SharedState>, req: Request) -> Response {
         }
     };
     let Some((_id, hash)) = record else {
-        return err(StatusCode::UNAUTHORIZED, "invalid credentials");
+        return record_login_failure(&state, &ip);
     };
     if !verify_password(&body.password, &hash) {
-        return err(StatusCode::UNAUTHORIZED, "invalid credentials");
+        return record_login_failure(&state, &ip);
     }
+    clear_login_failures(&state, &ip);
     let token = uuid::Uuid::new_v4().simple().to_string();
     {
         let mut sessions = state.sessions.lock().unwrap();
@@ -527,30 +594,54 @@ async fn update_region(
 async fn global_features(State(state): State<SharedState>) -> Response {
     let conn = state.db.lock().unwrap();
     match features::global_defaults(&conn) {
-        Ok(m) => Json(m).into_response(),
+        Ok(m) => Json(serde_json::json!({
+            "features": m,
+            "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold_global(&conn).ok().flatten(),
+        }))
+        .into_response(),
         Err(e) => db_err(e),
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct GlobalFeaturesBody {
+    #[serde(default)]
+    features: HashMap<String, bool>,
+    #[serde(default)]
+    iperf3_traffic_disable_pct: Option<f64>,
+}
+
 async fn set_global_features(
     State(state): State<SharedState>,
-    Json(body): Json<HashMap<String, bool>>,
+    Json(body): Json<GlobalFeaturesBody>,
 ) -> Response {
-    if let Some(k) = body.keys().find(|k| !features::is_valid(k)) {
+    if let Some(k) = body.features.keys().find(|k| !features::is_valid(k)) {
         return bad(&format!("unknown feature: {k}"));
+    }
+    if let Some(pct) = body.iperf3_traffic_disable_pct {
+        if !(0.0..=100.0).contains(&pct) {
+            return bad("iperf3_traffic_disable_pct must be within 0..=100");
+        }
     }
     {
         let conn = state.db.lock().unwrap();
-        for (k, v) in &body {
+        for (k, v) in &body.features {
             if let Err(e) = features::set_global(&conn, k, *v) {
                 return db_err(e);
             }
+        }
+        if let Err(e) = features::set_iperf3_traffic_global(&conn, body.iperf3_traffic_disable_pct) {
+            return db_err(e);
         }
     }
     features::refresh_all(&state);
     let conn = state.db.lock().unwrap();
     match features::global_defaults(&conn) {
-        Ok(m) => Json(m).into_response(),
+        Ok(m) => Json(serde_json::json!({
+            "features": m,
+            "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold_global(&conn).ok().flatten(),
+        }))
+        .into_response(),
         Err(e) => db_err(e),
     }
 }
@@ -568,6 +659,8 @@ async fn agent_features(State(state): State<SharedState>, Path(agent_id): Path<i
         "global": global,
         "overrides": overrides,
         "effective": effective,
+        "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold(&conn, agent_id).ok().flatten(),
+        "iperf3_traffic_disable_pct_override": features::iperf3_traffic_override(&conn, agent_id).ok().flatten(),
     }))
     .into_response()
 }
@@ -576,6 +669,9 @@ async fn agent_features(State(state): State<SharedState>, Path(agent_id): Path<i
 struct FeatureOverrides {
     /// `null` for a feature clears the override and reverts to the global default.
     overrides: HashMap<String, Option<bool>>,
+    /// Per-agent iperf3 traffic-disable threshold; `null` reverts to global.
+    #[serde(default)]
+    iperf3_traffic_disable_pct: Option<f64>,
 }
 
 async fn set_agent_features(
@@ -586,6 +682,11 @@ async fn set_agent_features(
     if let Some(k) = body.overrides.keys().find(|k| !features::is_valid(k)) {
         return bad(&format!("unknown feature: {k}"));
     }
+    if let Some(pct) = body.iperf3_traffic_disable_pct {
+        if !(0.0..=100.0).contains(&pct) {
+            return bad("iperf3_traffic_disable_pct must be within 0..=100");
+        }
+    }
     {
         let conn = state.db.lock().unwrap();
         for (k, v) in &body.overrides {
@@ -593,9 +694,20 @@ async fn set_agent_features(
                 return db_err(e);
             }
         }
+        if let Err(e) = features::set_iperf3_traffic_override(&conn, agent_id, body.iperf3_traffic_disable_pct) {
+            return db_err(e);
+        }
     }
     let effective = features::refresh_agent(&state, agent_id);
-    Json(serde_json::json!({ "effective": effective })).into_response()
+    let conn = state.db.lock().unwrap();
+    let iperf3_pct = features::iperf3_traffic_threshold(&conn, agent_id).ok().flatten();
+    let iperf3_override = features::iperf3_traffic_override(&conn, agent_id).ok().flatten();
+    Json(serde_json::json!({
+        "effective": effective,
+        "iperf3_traffic_disable_pct": iperf3_pct,
+        "iperf3_traffic_disable_pct_override": iperf3_override,
+    }))
+    .into_response()
 }
 
 // --------------------------------------------------------------- ping tasks

@@ -84,8 +84,8 @@ async fn browser_ws(State(state): State<SharedState>, ws: WebSocketUpgrade) -> a
 }
 
 async fn status_json(State(state): State<SharedState>) -> Json<Vec<AgentSnapshot>> {
-    let agents = state.agents.read().unwrap();
-    let list = agents.iter().map(|(id, a)| a.snapshot(*id)).collect();
+    let ids: Vec<i64> = state.agents.read().unwrap().keys().copied().collect();
+    let list = ids.iter().map(|id| state.snapshot_with_gates(*id)).collect();
     Json(list)
 }
 
@@ -201,6 +201,7 @@ async fn serve(
         browser_tx,
         themes_root: themes_root.clone(),
         sessions: Mutex::new(HashMap::new()),
+        login_failures: Mutex::new(HashMap::new()),
         task_waiters: Mutex::new(HashMap::new()),
         diag_pending: Mutex::new(HashMap::new()),
     });
@@ -272,6 +273,10 @@ async fn serve(
     let addr: SocketAddr = addr.parse().context("invalid listen addr")?;
     info!(%addr, themes_root = %themes_root.display(), "pharus server listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

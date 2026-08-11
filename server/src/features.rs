@@ -138,12 +138,90 @@ pub fn refresh_agent(state: &SharedState, agent_id: i64) -> Vec<String> {
 /// Server-side re-validation. The frontend hides disabled controls, but every
 /// request that acts on a feature must check here as well.
 pub fn enabled(state: &SharedState, agent_id: i64, feature: &str) -> bool {
-    state
+    let base = state
         .agents
         .read()
         .unwrap()
         .get(&agent_id)
-        .is_some_and(|a| a.features.iter().any(|f| f == feature))
+        .is_some_and(|a| a.features.iter().any(|f| f == feature));
+    if !base {
+        return false;
+    }
+    if feature == "iperf3" && iperf3_blocked(state, agent_id) {
+        return false;
+    }
+    true
+}
+
+const TRAFFIC_THRESHOLD_KEY: &str = "iperf3_traffic_disable_pct";
+
+fn parse_pct(value: Option<String>) -> Option<f64> {
+    let value = value?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    value.parse::<f64>().ok().filter(|p| (0.0..=100.0).contains(p))
+}
+
+/// Effective iperf3 traffic-disable threshold (%) for an agent: the per-agent
+/// override wins, else the global default. `None` = never auto-disable.
+pub fn iperf3_traffic_threshold(conn: &Connection, agent_id: i64) -> Result<Option<f64>> {
+    let per_agent = parse_pct(crate::db::agent_settings(conn, agent_id)?.get(TRAFFIC_THRESHOLD_KEY).cloned());
+    if per_agent.is_some() {
+        return Ok(per_agent);
+    }
+    Ok(parse_pct(crate::db::get_setting(conn, TRAFFIC_THRESHOLD_KEY)?))
+}
+
+pub fn iperf3_traffic_threshold_global(conn: &Connection) -> Result<Option<f64>> {
+    Ok(parse_pct(crate::db::get_setting(conn, TRAFFIC_THRESHOLD_KEY)?))
+}
+
+pub fn iperf3_traffic_override(conn: &Connection, agent_id: i64) -> Result<Option<f64>> {
+    Ok(parse_pct(crate::db::agent_settings(conn, agent_id)?.get(TRAFFIC_THRESHOLD_KEY).cloned()))
+}
+
+pub fn set_iperf3_traffic_global(conn: &Connection, value: Option<f64>) -> Result<()> {
+    match value {
+        Some(p) => crate::db::set_setting(conn, TRAFFIC_THRESHOLD_KEY, &format!("{p}")),
+        None => crate::db::clear_setting(conn, TRAFFIC_THRESHOLD_KEY).map(|_| ()),
+    }
+}
+
+pub fn set_iperf3_traffic_override(
+    conn: &Connection,
+    agent_id: i64,
+    value: Option<f64>,
+) -> Result<()> {
+    match value {
+        Some(p) => crate::db::set_agent_setting(
+            conn,
+            agent_id,
+            TRAFFIC_THRESHOLD_KEY,
+            &format!("{p}"),
+        ),
+        None => crate::db::clear_agent_setting(conn, agent_id, TRAFFIC_THRESHOLD_KEY).map(|_| ()),
+    }
+}
+
+/// True when the agent's current billing-cycle traffic usage has reached its
+/// configured iperf3 auto-disable threshold.
+pub fn iperf3_blocked(state: &crate::state::AppState, agent_id: i64) -> bool {
+    let threshold = {
+        let conn = state.db.lock().unwrap();
+        iperf3_traffic_threshold(&conn, agent_id).ok().flatten()
+    };
+    let Some(threshold) = threshold else {
+        return false;
+    };
+    let pct = {
+        let agents = state.agents.read().unwrap();
+        agents
+            .get(&agent_id)
+            .and_then(|a| a.billing.as_ref().and_then(|b| crate::billing::usage_percent(b, &a.traffic)))
+    };
+    pct.is_some_and(|p| p >= threshold)
 }
 
 #[cfg(test)]
