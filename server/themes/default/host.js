@@ -28,6 +28,14 @@
   var diagPing = document.getElementById('diag-ping');
   var diagTraceroute = document.getElementById('diag-traceroute');
   var diagMtr = document.getElementById('diag-mtr');
+  var diagIperfBox = document.getElementById('diag-iperf3');
+  var diagIperfServer = document.getElementById('diag-iperf-server');
+  var diagIperfDir = document.getElementById('diag-iperf-dir');
+  var diagIperfDuration = document.getElementById('diag-iperf-duration');
+  var diagIperfParallel = document.getElementById('diag-iperf-parallel');
+  var diagIperfProtocol = document.getElementById('diag-iperf-protocol');
+  var diagIperfLength = document.getElementById('diag-iperf-length');
+  var diagIperfBtn = document.getElementById('diag-iperf-btn');
   var diagError = document.getElementById('diag-error');
   var diagSessions = document.getElementById('diag-sessions');
   var diagEmpty = document.getElementById('diag-empty');
@@ -83,6 +91,9 @@
   var adminOn = false;
   var editingId = null;
   var lastChart = null;
+  var hoverTaskId = null;
+  var hoverPoint = null;
+  var hoverFramePending = false;
 
   /* ---------- host card ---------- */
   function buildCard() {
@@ -443,7 +454,7 @@
     var plotHeight = Math.max(1, plotBottom - top);
     var xAt = function (ts) { return left + (Number(ts) - minTs) / (maxTs - minTs) * plotWidth; };
     var yAt = function (rtt) { return top + (1 - Number(rtt) / maxRtt) * plotHeight; };
-    lastChart = { points: points, tasks: tasks, minTs: minTs, maxTs: maxTs, xAt: xAt, left: left, top: top, plotBottom: plotBottom, plotWidth: plotWidth };
+    lastChart = { points: points, tasks: tasks, minTs: minTs, maxTs: maxTs, xAt: xAt, yAt: yAt, left: left, top: top, plotBottom: plotBottom, plotWidth: plotWidth };
 
     ctx.lineWidth = 1;
     ctx.font = '10px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
@@ -473,8 +484,11 @@
       var series = points.filter(function (point) { return String(point.task_id) === String(task.id); })
         .sort(function (a, b) { return Number(a.ts) - Number(b.ts); });
       if (!series.length) return;
+      var isHover = hoverTaskId != null && String(task.id) === String(hoverTaskId);
+      ctx.save();
+      if (hoverTaskId != null && !isHover) ctx.globalAlpha = 0.22;
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.7;
+      ctx.lineWidth = isHover ? 2.8 : 1.7;
       ctx.beginPath();
       var drawing = false;
       series.forEach(function (point) {
@@ -486,6 +500,7 @@
         if (!drawing) { ctx.moveTo(x, y); drawing = true; } else { ctx.lineTo(x, y); }
       });
       ctx.stroke();
+      ctx.restore();
       if (!allTasks) series.forEach(function (point) {
         var loss = Math.max(0, Math.min(1, Number(point.loss) || 0));
         if (!loss) return;
@@ -494,7 +509,7 @@
         ctx.fillRect(x - 1.5, rect.height - 14 - loss * 22, 3, Math.max(2, loss * 22));
       });
       var legend = document.createElement('span');
-      legend.className = 'legend-item';
+      legend.className = 'legend-item' + (isHover ? ' active' : '');
       var swatch = document.createElement('span');
       swatch.className = 'legend-swatch';
       swatch.style.background = color;
@@ -513,6 +528,27 @@
       legend.appendChild(label);
       pingLegend.appendChild(legend);
     });
+
+    if (hoverPoint && Number.isFinite(hoverPoint.rtt)) {
+      var hx = xAt(hoverPoint.ts);
+      var hy = yAt(hoverPoint.rtt);
+      ctx.beginPath();
+      ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+      ctx.fillStyle = hoverPoint.color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.stroke();
+    }
+  }
+
+  function scheduleHoverRedraw() {
+    if (hoverFramePending) return;
+    hoverFramePending = true;
+    requestAnimationFrame(function () {
+      hoverFramePending = false;
+      drawPingChart();
+    });
   }
 
   /* ---------- diagnostics ---------- */
@@ -520,17 +556,20 @@
     var online = !!entry && !!entry.online;
     var lg = !!entry && P.hasFeature(entry, 'lg');
     var mtr = !!entry && P.hasFeature(entry, 'mtr');
+    var iperf3 = !!entry && P.hasFeature(entry, 'iperf3');
     diagPing.hidden = !lg;
     diagTraceroute.hidden = !lg;
     diagMtr.hidden = !mtr;
     diagPing.disabled = !online;
     diagTraceroute.disabled = !online;
     diagMtr.disabled = !online;
+    diagIperfBox.hidden = !iperf3;
+    diagIperfBtn.disabled = !online;
     document.querySelector('.cycles-field').hidden = !mtr;
     if (entry && !online) {
       diagError.textContent = t('diag.offline');
       diagError.hidden = false;
-    } else if (entry && !lg && !mtr) {
+    } else if (entry && !lg && !mtr && !iperf3) {
       diagError.textContent = t('feature.disabled').replace('{feature}', t('feature.diagnostics'));
       diagError.hidden = false;
     } else {
@@ -539,7 +578,10 @@
   }
 
   function diagnosticLabel(kind) {
-    return kind === 'traceroute' ? t('diag.traceroute') : kind === 'mtr' ? t('diag.mtr') : t('diag.ping');
+    return kind === 'traceroute' ? t('diag.traceroute')
+      : kind === 'mtr' ? t('diag.mtr')
+      : kind === 'iperf3' ? t('diag.iperf3')
+      : t('diag.ping');
   }
 
   function setDiagnosticState(request, stateName, exitCode) {
@@ -595,6 +637,8 @@
     if (message.result != null) {
       if (message.kind === 'mtr' && Array.isArray(message.result)) {
         renderMtrTable(request, message.result);
+      } else if (message.kind === 'iperf3' && typeof message.result === 'object') {
+        renderIperf3Result(request, message.result);
       } else {
         appendDiagnosticPart(request, JSON.stringify(message.result, null, 2) + '\n', 'structured');
       }
@@ -602,6 +646,21 @@
     if (message.done) {
       setDiagnosticState(request, message.exit_code == null || message.exit_code === 0 ? 'finished' : 'failed', message.exit_code);
     }
+  }
+
+  function iperfMbps(bps) {
+    var mbps = Number(bps) / 1e6;
+    return mbps >= 1000 ? (mbps / 1000).toFixed(2) + ' Gbps' : mbps.toFixed(1) + ' Mbps';
+  }
+
+  /* Renders the structured iperf3 summary into the diagnostic session. */
+  function renderIperf3Result(request, result) {
+    var lines = [];
+    lines.push(t('diag.iperf3') + ' · ' + (result.direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
+    if (result.throughput_bps != null) lines.push(t('diag.throughput') + ': ' + iperfMbps(result.throughput_bps));
+    if (result.retransmits != null) lines.push(t('diag.retransmits') + ': ' + result.retransmits);
+    if (result.duration_s != null) lines.push(t('diag.duration') + ': ' + Number(result.duration_s).toFixed(1) + ' s');
+    appendDiagnosticPart(request, lines.join('\n') + '\n', 'structured');
   }
 
   function mtrPad(value, width) {
@@ -670,6 +729,45 @@
       createDiagnosticSession(response.request_id, hostId, kind, target);
     }).catch(function (error) {
       diagError.textContent = t('common.error') + ': ' + error.message;
+      diagError.hidden = false;
+    });
+  }
+
+  function runIperf3() {
+    diagError.hidden = true;
+    if (!entry || !entry.online) {
+      diagError.textContent = t('diag.offline');
+      diagError.hidden = false;
+      return;
+    }
+    if (!P.hasFeature(entry, 'iperf3')) {
+      diagError.textContent = t('feature.disabled').replace('{feature}', t('feature.iperf3'));
+      diagError.hidden = false;
+      return;
+    }
+    var duration = Math.max(1, Math.min(15, parseInt(diagIperfDuration.value, 10) || 10));
+    var direction = diagIperfDir.value;
+    var server = diagIperfServer.value.trim();
+    if (!server) {
+      diagError.textContent = t('diag.targetRequired');
+      diagError.hidden = false;
+      diagIperfServer.focus();
+      return;
+    }
+    var parallel = parseInt(diagIperfParallel.value, 10);
+    var length = parseInt(diagIperfLength.value, 10);
+    var body = { agent_id: hostId, server: server, port: 5201, direction: direction, duration: duration, protocol: diagIperfProtocol.value };
+    if (parallel > 0) body.parallel = parallel;
+    if (length > 0) body.length = length;
+    P.requestJson('/api/diag/iperf3', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (response) {
+      if (!response.request_id) throw new Error(t('diag.missingRequestId'));
+      createDiagnosticSession(response.request_id, hostId, 'iperf3', server + ' · ' + (direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
+    }).catch(function (error) {
+      diagError.textContent = t('common.error') + ': ' + (error && error.message ? error.message : error);
       diagError.hidden = false;
     });
   }
@@ -993,6 +1091,7 @@
   diagPing.addEventListener('click', function () { runDiagnostic('ping'); });
   diagTraceroute.addEventListener('click', function () { runDiagnostic('traceroute'); });
   diagMtr.addEventListener('click', function () { runDiagnostic('mtr'); });
+  diagIperfBtn.addEventListener('click', runIperf3);
   editModeBtn.addEventListener('click', function () {
     if (adminOn) {
       setAdmin(false);
@@ -1082,7 +1181,8 @@
     requestAnimationFrame(function () { chartResizePending = false; drawPingChart(); });
   });
 
-  // hover tooltip on the latency chart
+  // hover tooltip on the latency chart: the curve closest to the pointer
+  // (vertically, at the pointer's timestamp) gets highlighted and read out
   pingChart.addEventListener('mousemove', function (ev) {
     if (!lastChart || !lastChart.points.length) {
       pingTip.hidden = true;
@@ -1091,36 +1191,53 @@
     }
     var rect = pingChart.getBoundingClientRect();
     var x = ev.clientX - rect.left;
+    var y = ev.clientY - rect.top;
     var ts = lastChart.minTs + (x - lastChart.left) / lastChart.plotWidth * (lastChart.maxTs - lastChart.minTs);
-    var nearest = null, minDist = Infinity;
-    lastChart.points.forEach(function (p) {
-      var d = Math.abs(Number(p.ts) - ts);
-      if (d < minDist) { minDist = d; nearest = p; }
+    var best = null;
+    lastChart.tasks.forEach(function (task, taskIndex) {
+      var nearest = null, minDist = Infinity;
+      lastChart.points.forEach(function (p) {
+        if (String(p.task_id) !== String(task.id)) return;
+        if (!Number.isFinite(Number(p.rtt_avg))) return;
+        var d = Math.abs(Number(p.ts) - ts);
+        if (d < minDist) { minDist = d; nearest = p; }
+      });
+      if (!nearest) return;
+      var dy = Math.abs(lastChart.yAt(nearest.rtt_avg) - y);
+      if (!best || dy < best.dy) {
+        best = { task: task, point: nearest, dy: dy, color: CHART_COLORS[taskIndex % CHART_COLORS.length] };
+      }
     });
-    if (!nearest) { pingTip.hidden = true; pingGuide.hidden = true; return; }
-    var task = null;
-    for (var i = 0; i < lastChart.tasks.length; i++) {
-      if (String(lastChart.tasks[i].id) === String(nearest.task_id)) { task = lastChart.tasks[i]; break; }
+    if (!best) {
+      pingTip.hidden = true;
+      pingGuide.hidden = true;
+      return;
     }
-    var name = task ? (task.label || ('#' + task.id)) : ('#' + nearest.task_id);
-    var rtt = Number(nearest.rtt_avg);
-    var loss = Math.max(0, Math.min(1, Number(nearest.loss) || 0));
-    pingTip.textContent = name + ' · ' + formatChartTime(Number(nearest.ts))
-      + ' · ' + (Number.isFinite(rtt) ? rtt.toFixed(1) + ' ms' : '—')
+    hoverTaskId = best.task.id;
+    hoverPoint = { ts: Number(best.point.ts), rtt: Number(best.point.rtt_avg), color: best.color };
+    var name = best.task.label || ('#' + best.task.id);
+    var rtt = Number(best.point.rtt_avg);
+    var loss = Math.max(0, Math.min(1, Number(best.point.loss) || 0));
+    pingTip.textContent = name + ' · ' + formatChartTime(Number(best.point.ts))
+      + ' · ' + rtt.toFixed(1) + ' ms'
       + ' · ' + Math.round(loss * 100) + '% ' + t('ping.lossShort');
     pingTip.hidden = false;
     var tipLeft = x + 12;
     if (tipLeft + pingTip.offsetWidth > rect.width - 8) tipLeft = x - pingTip.offsetWidth - 12;
     pingTip.style.left = Math.max(4, tipLeft) + 'px';
-    pingTip.style.top = Math.max(4, ev.clientY - rect.top - 14) + 'px';
+    pingTip.style.top = Math.max(4, y - 14) + 'px';
     pingGuide.style.left = Math.round(x) + 'px';
     pingGuide.style.top = lastChart.top + 'px';
     pingGuide.style.height = Math.max(0, lastChart.plotBottom - lastChart.top) + 'px';
     pingGuide.hidden = false;
+    scheduleHoverRedraw();
   });
   pingChart.addEventListener('mouseleave', function () {
+    hoverTaskId = null;
+    hoverPoint = null;
     pingTip.hidden = true;
     pingGuide.hidden = true;
+    drawPingChart();
   });
 
   /* ---------- boot ---------- */

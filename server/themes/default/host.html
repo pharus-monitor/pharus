@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="doc.title.host">Pharus · Host</title>
-  <link rel="stylesheet" href="style.css?v=0.4.3" />
+  <link rel="stylesheet" href="style.css?v=0.4.4" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -114,6 +114,39 @@
           <button class="btn" id="diag-ping" type="button" data-i18n="diag.ping">Ping</button>
           <button class="btn" id="diag-traceroute" type="button" data-i18n="diag.traceroute">路由追踪</button>
           <button class="btn" id="diag-mtr" type="button" data-i18n="diag.mtr">MTR</button>
+        </div>
+        <div class="panel-controls diag-controls iperf3-controls" id="diag-iperf3" hidden>
+          <label class="field compact">
+            <span data-i18n="diag.iperfServer">测速服务器</span>
+            <input id="diag-iperf-server" type="text" inputmode="url" placeholder="1.2.3.4 / iperf.example.com" data-i18n-placeholder="diag.iperfServerPlaceholder" />
+          </label>
+          <label class="field compact">
+            <span data-i18n="diag.direction">方向</span>
+            <select id="diag-iperf-dir">
+              <option value="down" data-i18n="diag.directionDown">下行</option>
+              <option value="up" data-i18n="diag.directionUp">上行</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span data-i18n="diag.duration">时长(秒)</span>
+            <input id="diag-iperf-duration" type="number" min="1" max="15" value="10" />
+          </label>
+          <label class="field compact">
+            <span data-i18n="diag.parallel">线程数</span>
+            <input id="diag-iperf-parallel" type="number" min="1" max="16" placeholder="4" />
+          </label>
+          <label class="field compact">
+            <span data-i18n="diag.protocol">协议</span>
+            <select id="diag-iperf-protocol">
+              <option value="tcp" selected data-i18n="diag.protocolTcp">TCP</option>
+              <option value="udp" data-i18n="diag.protocolUdp">UDP</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span data-i18n="diag.packetSize">包大小(字节)</span>
+            <input id="diag-iperf-length" type="number" min="1" placeholder="默认" />
+          </label>
+          <button class="btn" id="diag-iperf-btn" type="button" data-i18n="diag.iperf3">带宽测速</button>
         </div>
         <p class="panel-message error" id="diag-error" role="alert" hidden></p>
         <div class="diag-sessions" id="diag-sessions"></div>
@@ -415,7 +448,7 @@
     </div>
   </div>
 
-  <script src="common.js?v=0.4.3"></script>
-  <script src="host.js?v=0.4.3"></script>
+  <script src="common.js?v=0.4.4"></script>
+  <script src="host.js?v=0.4.4"></script>
 </body>
 </html>
