@@ -281,7 +281,7 @@ async fn geo_ipinfo(client: &reqwest::Client, ip: &str) -> Option<(Option<String
         .get("org")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    (region.is_some() || asn.is_some()).then(|| (region, asn))
+    (region.is_some() || asn.is_some()).then_some((region, asn))
 }
 
 async fn geo_ipwhois(client: &reqwest::Client, ip: &str) -> Option<(Option<String>, Option<String>)> {
@@ -306,7 +306,7 @@ async fn geo_ipwhois(client: &reqwest::Client, ip: &str) -> Option<(Option<Strin
                 .and_then(serde_json::Value::as_u64)
                 .map(|n| format!("AS{n}"))
         });
-    (region.is_some() || asn.is_some()).then(|| (region, asn))
+    (region.is_some() || asn.is_some()).then_some((region, asn))
 }
 
 async fn geo_ipapi(client: &reqwest::Client, ip: &str) -> Option<(Option<String>, Option<String>)> {
@@ -325,7 +325,7 @@ async fn geo_ipapi(client: &reqwest::Client, ip: &str) -> Option<(Option<String>
         .get("as")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    (region.is_some() || asn.is_some()).then(|| (region, asn))
+    (region.is_some() || asn.is_some()).then_some((region, asn))
 }
 
 /// Persist an accepted iperf3 run (requester IP + target), then enrich it with
