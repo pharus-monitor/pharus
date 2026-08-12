@@ -107,6 +107,28 @@ async fn themed_static(State(state): State<SharedState>, req: Request) -> Respon
     }
 }
 
+/// Serve a named page (host.html / admin.html) from the active theme so the
+/// UI links can drop the `.html` suffix (`/host`, `/admin`).
+async fn themed_page_host(State(state): State<SharedState>, req: Request) -> Response {
+    serve_theme_page(&state, "host", req).await
+}
+async fn themed_page_admin(State(state): State<SharedState>, req: Request) -> Response {
+    serve_theme_page(&state, "admin", req).await
+}
+async fn serve_theme_page(state: &SharedState, page: &str, req: Request) -> Response {
+    let theme_dir = current_theme_dir(state);
+    let file = theme_dir.join(format!("{page}.html"));
+    let svc = if file.is_file() {
+        ServeFile::new(file)
+    } else {
+        ServeFile::new(theme_dir.join("index.html"))
+    };
+    match svc.oneshot(req).await {
+        Ok(res) => res.into_response(),
+        Err(e) => match e {},
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Same story as the agent: make the rustls provider deterministic so
@@ -267,6 +289,8 @@ async fn serve(
         .route("/ws/agent", get(agent_ws))
         .route("/api/stream", get(browser_ws))
         .route("/api/status", get(status_json))
+        .route("/host", get(themed_page_host))
+        .route("/admin", get(themed_page_admin))
         .merge(api::router())
         .merge(admin::router(state.clone()))
         .fallback(themed_static)

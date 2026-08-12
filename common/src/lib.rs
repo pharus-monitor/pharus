@@ -44,6 +44,12 @@ pub struct Metrics {
     /// Cumulative bytes transmitted since boot (0 = old agent, not reported)
     #[serde(default)]
     pub net_tx_total: u64,
+    /// Disk write rate in bytes/s since the last sample (0 = old agent).
+    #[serde(default)]
+    pub disk_write_bps: u64,
+    /// Disk read rate in bytes/s since the last sample (0 = old agent).
+    #[serde(default)]
+    pub disk_read_bps: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

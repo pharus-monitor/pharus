@@ -128,6 +128,13 @@ fn ip_in_rule(ip: &std::net::IpAddr, rule: &NetRule) -> bool {
 }
 
 fn is_trusted_proxy(state: &SharedState, peer: &std::net::IpAddr) -> bool {
+    // A reverse proxy running on the same host (Caddy/Nginx forwarding to
+    // pharus on 127.0.0.1) is indistinguishable from a local client at the
+    // TCP level, and only local processes can reach the loopback interface,
+    // so its forwarding headers are trusted.
+    if peer.is_loopback() {
+        return true;
+    }
     let configured = {
         let conn = state.db.lock().unwrap();
         crate::db::get_setting(&conn, "trusted_proxies")
@@ -135,11 +142,14 @@ fn is_trusted_proxy(state: &SharedState, peer: &std::net::IpAddr) -> bool {
             .flatten()
             .unwrap_or_default()
     };
-    let specs: Vec<&str> = if configured.trim().is_empty() {
-        CLOUDFLARE_IPS.to_vec()
-    } else {
-        configured.split(',').map(str::trim).filter(|s| !s.is_empty()).collect()
-    };
+    // Trusted set = Cloudflare's edge ranges ∪ operator-configured proxies.
+    let mut specs: Vec<&str> = CLOUDFLARE_IPS.to_vec();
+    for spec in configured.split(',') {
+        let spec = spec.trim();
+        if !spec.is_empty() {
+            specs.push(spec);
+        }
+    }
     specs.iter().filter_map(|s| parse_rule(s)).any(|rule| ip_in_rule(peer, &rule))
 }
 

@@ -204,7 +204,7 @@ async fn collect_mem_desc() -> Option<String> {
     }
 }
 
-fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_total: u64, tx_total: u64, interval_s: u64) -> Metrics {
+fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_total: u64, tx_total: u64, disk_write_diff: u64, disk_read_diff: u64, interval_s: u64) -> Metrics {
     let cpu_usage = sys.global_cpu_usage();
     let mut disk_used = 0u64;
     let mut disk_total = 0u64;
@@ -227,6 +227,8 @@ fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_t
         uptime: System::uptime(),
         net_rx_total: rx_total,
         net_tx_total: tx_total,
+        disk_write_bps: disk_write_diff / interval_s.max(1),
+        disk_read_bps: disk_read_diff / interval_s.max(1),
     }
 }
 
@@ -1458,7 +1460,7 @@ async fn metrics_loop(
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
-    let mut disks = Disks::new_with_refreshed_list();
+    let mut disks = Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::everything());
     let mut networks = Networks::new_with_refreshed_list();
 
     sys.refresh_cpu_usage();
@@ -1471,6 +1473,8 @@ async fn metrics_loop(
 
     let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
     let mut prev_tx: u64 = networks.list().values().map(|n| n.total_transmitted()).sum();
+    let mut prev_write: u64 = disks.list().iter().map(|d| d.usage().total_written_bytes).sum();
+    let mut prev_read: u64 = disks.list().iter().map(|d| d.usage().total_read_bytes).sum();
 
     let mut tick = interval(Duration::from_secs(cfg.interval.max(1)));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -1487,7 +1491,7 @@ async fn metrics_loop(
 
         sys.refresh_cpu_usage();
         sys.refresh_memory();
-        disks.refresh(true);
+        disks.refresh_specifics(true, sysinfo::DiskRefreshKind::everything());
         networks.refresh(false);
 
         let rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
@@ -1496,8 +1500,14 @@ async fn metrics_loop(
         let tx_diff = tx.saturating_sub(prev_tx);
         prev_rx = rx;
         prev_tx = tx;
+        let write: u64 = disks.list().iter().map(|d| d.usage().total_written_bytes).sum();
+        let write_diff = write.saturating_sub(prev_write);
+        prev_write = write;
+        let read: u64 = disks.list().iter().map(|d| d.usage().total_read_bytes).sum();
+        let read_diff = read.saturating_sub(prev_read);
+        prev_read = read;
 
-        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, elapsed);
+        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, write_diff, read_diff, elapsed);
         msg_tx.send(AgentMsg::Metrics { data: metrics })?;
     }
 }

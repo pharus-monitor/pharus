@@ -37,7 +37,8 @@
     ]
   };
 
-  var FEATURE_NAMES = ['lg', 'mtr', 'iperf3', 'streaming', 'ping', 'tasks'];
+  // Streaming is managed from its own admin tab, so it's excluded here.
+  var FEATURE_NAMES = ['lg', 'mtr', 'iperf3', 'ping', 'tasks'];
 
   function node(tag, className, text) {
     var result = document.createElement(tag);
@@ -274,7 +275,10 @@
       build(options.fields);
       options.modal.hidden = false;
       var first = options.fields.querySelector('input, select, textarea');
-      if (first) first.focus();
+      if (first) {
+        var btn = first.tagName === 'SELECT' ? first.closest('.p-select') && first.closest('.p-select').querySelector('.p-select-btn') : null;
+        (btn || first).focus();
+      }
     }
 
     function closeModal() {
@@ -1037,8 +1041,18 @@
           var b = agent.billing || {};
           var expires = b.expires_at ? window.Pharus.fmtDate(b.expires_at) : '—';
           var actions = editActions(function () { openBillingForm(agent); }, null);
+          var token = agent.token || '';
+          var tokCell = node('span', 'secret-mask', token.length > 4 ? token.slice(0, 4) + '••••••' : '—');
+          tokCell.title = t('common.copy');
+          tokCell.style.cursor = token ? 'pointer' : 'default';
+          tokCell.addEventListener('click', function () {
+            if (!token) return;
+            if (navigator.clipboard) navigator.clipboard.writeText(token).catch(function () {});
+            tokCell.textContent = token;
+          });
           return [
             agent.name || ('Agent #' + agent.agent_id),
+            tokCell,
             b.reset_day != null ? String(b.reset_day) : '—',
             b.quota_bytes != null ? window.Pharus.fmtBytes(b.quota_bytes) : '—',
             expires,
@@ -1047,7 +1061,7 @@
           ];
         });
         options.content.appendChild(makeTable(
-          [t('common.agent'), t('admin.resetDay'), t('billing.quota'), t('billing.expires'), t('billing.price'), t('common.actions')],
+          [t('common.agent'), t('admin.token'), t('admin.resetDay'), t('billing.quota'), t('billing.expires'), t('billing.price'), t('common.actions')],
           rows));
       }).catch(showError);
     }
@@ -1299,6 +1313,59 @@
     }
 
     /* ---------- iPerf3 log ---------- */
+    /* ---------- Streaming detection (records + feature switch) ---------- */
+    function renderStreamingDetect() {
+      setLoading(); clearError();
+      Promise.all([options.request('/api/admin/features'), options.request('/api/admin/streaming?limit=200')]).then(function (values) {
+        if (!active || currentView !== 'streamingDetect') return;
+        var globals = values[0] || {};
+        var records = Array.isArray(values[1]) ? values[1] : [];
+        options.content.innerHTML = '';
+        options.content.appendChild(toolbar(t('admin.streaming'), null));
+
+        // global feature switch
+        var switchBox = node('div', 'feature-defaults');
+        var on = checkboxField('feature.streaming', !!(globals.features && globals.features.streaming));
+        on.el.className = 'toggle-field';
+        switchBox.appendChild(on.el);
+        var swStatus = node('span', 'inline-status');
+        var swSave = actionButton(t('admin.save'), function () {
+          swSave.disabled = true;
+          swStatus.textContent = t('common.saving');
+          options.request('/api/admin/features', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ features: { streaming: on.input.checked } })
+          }).then(function () {
+            swStatus.textContent = t('common.saved'); swStatus.className = 'inline-status ok';
+          }).catch(function (error) {
+            swStatus.textContent = t('common.error') + ': ' + error.message; swStatus.className = 'inline-status error';
+          }).then(function () { swSave.disabled = false; });
+        }, 'btn primary');
+        switchBox.appendChild(swSave);
+        switchBox.appendChild(swStatus);
+        options.content.appendChild(switchBox);
+
+        // recent detection records across all hosts
+        if (!records.length) {
+          options.content.appendChild(node('p', 'admin-empty', t('common.noData')));
+          return;
+        }
+        var rows = records.map(function (r) {
+          var status = window.Pharus.serviceStatus({ status: r.status });
+          return [
+            new Date(Number(r.ts) * 1000).toLocaleString(),
+            r.agent || ('#' + r.agent_id),
+            r.service,
+            node('span', 'streaming-history-status ' + window.Pharus.statusClass(status), t('streaming.status.' + status)),
+            r.detail || '—'
+          ];
+        });
+        options.content.appendChild(makeTable([
+          t('common.time'), t('common.agent'), t('streaming.service'), t('common.status'), t('iperfLog.target')
+        ], rows));
+      }).catch(showError);
+    }
+
     function renderIperf3Log() {
       setLoading(); clearError();
       options.request('/api/admin/iperf3-log?limit=200').then(function (rows) {
@@ -1336,6 +1403,7 @@
       else if (currentView === 'regions') renderRegions();
       else if (currentView === 'features') renderFeatures();
       else if (currentView === 'hostBilling') renderHostBilling();
+      else if (currentView === 'streamingDetect') renderStreamingDetect();
       else if (currentView === 'iperf3Log') renderIperf3Log();
       else if (currentView === 'themes') renderThemes();
       else if (currentView === 'settings') renderSettings();

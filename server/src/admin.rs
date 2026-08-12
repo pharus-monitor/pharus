@@ -70,6 +70,7 @@ pub fn router(state: SharedState) -> Router<SharedState> {
             get(list_agent_secrets).put(save_agent_secrets),
         )
         .route("/api/admin/iperf3-log", get(iperf3_log))
+        .route("/api/admin/streaming", get(streaming_log))
         .route("/api/admin/password", put(update_password))
         .route("/api/admin/themes", get(list_themes).post(upload_theme))
         .route(
@@ -488,6 +489,10 @@ fn bad(msg: &str) -> Response {
 // ------------------------------------------------------------------- agents
 
 async fn list_agents(State(state): State<SharedState>) -> Response {
+    let tokens = {
+        let conn = state.db.lock().unwrap();
+        db::list_agent_tokens(&conn).unwrap_or_default()
+    };
     let agents = state.agents.read().unwrap();
     let mut list: Vec<_> = agents
         .iter()
@@ -499,6 +504,7 @@ async fn list_agents(State(state): State<SharedState>) -> Response {
                 "region": a.region,
                 "features": a.features,
                 "billing": a.billing,
+                "token": tokens.get(id),
             })
         })
         .collect();
@@ -1686,6 +1692,37 @@ async fn iperf3_log(
                         "target": r.target,
                         "region": r.region,
                         "asn": r.asn,
+                        "ts": r.ts,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => db_err(e),
+    }
+}
+
+async fn streaming_log(
+    State(state): State<SharedState>,
+    Query(q): Query<Iperf3LogQuery>,
+) -> Response {
+    let limit = q.limit.unwrap_or(200).clamp(1, 500);
+    let conn = state.db.lock().unwrap();
+    let names = match db::list_agents(&conn) {
+        Ok(agents) => agents.into_iter().collect::<HashMap<_, _>>(),
+        Err(_) => HashMap::new(),
+    };
+    match db::list_streaming_history_all(&conn, limit) {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|(agent_id, r)| {
+                    serde_json::json!({
+                        "agent_id": agent_id,
+                        "agent": names.get(&agent_id).cloned()
+                            .unwrap_or_else(|| format!("Agent #{agent_id}")),
+                        "service": r.service,
+                        "status": r.status,
+                        "detail": r.detail,
                         "ts": r.ts,
                     })
                 })

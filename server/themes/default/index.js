@@ -37,7 +37,7 @@
   } catch (e) { /* ignore invalid view preference */ }
 
   function openHost(id) {
-    window.location.href = 'host.html?id=' + id;
+    window.location.href = 'host?id=' + id;
   }
 
   function ensureCard(id) {

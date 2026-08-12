@@ -201,7 +201,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 14;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -319,6 +319,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if version < 13 {
+        add_column(conn, "metrics_history", "disk_write_bps", "INTEGER NOT NULL DEFAULT 0")?;
+    }
+    if version < 14 {
+        add_column(conn, "metrics_history", "disk_read_bps", "INTEGER NOT NULL DEFAULT 0")?;
+    }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
 }
@@ -381,12 +387,22 @@ pub fn list_agents(conn: &Connection) -> Result<Vec<(i64, String)>> {
     Ok(rows)
 }
 
+/// Admin console only: the per-agent tokens, so an operator can re-issue a
+/// config without SSHing to the server for `add-agent` output.
+pub fn list_agent_tokens(conn: &Connection) -> Result<HashMap<i64, String>> {
+    let mut stmt = conn.prepare("SELECT id, token FROM agents")?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+    Ok(rows)
+}
+
 pub fn insert_metrics(conn: &Connection, agent_id: i64, m: &Metrics) -> Result<()> {
     conn.execute(
         "INSERT INTO metrics_history
          (agent_id, ts, cpu_usage, mem_used, mem_total, swap_used, swap_total,
-          disk_used, disk_total, net_rx_bps, net_tx_bps, load1, uptime)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+          disk_used, disk_total, net_rx_bps, net_tx_bps, load1, uptime, disk_write_bps, disk_read_bps)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![
             agent_id,
             now_ts(),
@@ -401,6 +417,8 @@ pub fn insert_metrics(conn: &Connection, agent_id: i64, m: &Metrics) -> Result<(
             m.net_tx_bps as i64,
             m.load1,
             m.uptime as i64,
+            m.disk_write_bps as i64,
+            m.disk_read_bps as i64,
         ],
     )?;
     Ok(())
@@ -617,6 +635,8 @@ pub struct MetricsPoint {
     pub net_rx_bps: i64,
     pub net_tx_bps: i64,
     pub load1: f64,
+    pub disk_write_bps: i64,
+    pub disk_read_bps: i64,
 }
 
 pub fn metrics_history(
@@ -627,7 +647,7 @@ pub fn metrics_history(
 ) -> Result<Vec<MetricsPoint>> {
     let mut stmt = conn.prepare(
         "SELECT ts, cpu_usage, mem_used, mem_total, disk_used, disk_total,
-                net_rx_bps, net_tx_bps, load1
+                net_rx_bps, net_tx_bps, load1, disk_write_bps, disk_read_bps
          FROM metrics_history
          WHERE agent_id = ?1 AND ts >= ?2
          ORDER BY ts DESC LIMIT ?3",
@@ -644,6 +664,8 @@ pub fn metrics_history(
                 net_rx_bps: r.get(6)?,
                 net_tx_bps: r.get(7)?,
                 load1: r.get(8)?,
+                disk_write_bps: r.get(9)?,
+                disk_read_bps: r.get(10)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1219,6 +1241,31 @@ pub fn list_streaming_history(
                 detail: r.get(2)?,
                 ts: r.get(3)?,
             })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Recent streaming checks across every agent (agent_id paired with the row).
+pub fn list_streaming_history_all(
+    conn: &Connection,
+    limit: i64,
+) -> Result<Vec<(i64, StreamingHistoryRow)>> {
+    let mut stmt = conn.prepare(
+        "SELECT agent_id, service, status, detail, ts FROM streaming_history
+         ORDER BY ts DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                StreamingHistoryRow {
+                    service: r.get(1)?,
+                    status: r.get(2)?,
+                    detail: r.get(3)?,
+                    ts: r.get(4)?,
+                },
+            ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)

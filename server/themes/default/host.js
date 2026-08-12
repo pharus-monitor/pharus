@@ -7,7 +7,7 @@
 
   var hostId = parseInt(new URLSearchParams(location.search).get('id'), 10);
   if (!Number.isFinite(hostId)) {
-    window.location.href = 'index.html';
+    window.location.href = 'index';
     return;
   }
 
@@ -25,9 +25,8 @@
   var pingGuide = document.getElementById('ping-guide');
   var metricsRange = document.getElementById('metrics-range');
   var metricsMessage = document.getElementById('metrics-message');
-  var metricsChart = document.getElementById('metrics-chart');
-  var metricsLegend = document.getElementById('metrics-legend');
-  var metricsTip = document.getElementById('metrics-tip');
+  var metricTiles = document.getElementById('metric-tiles');
+  var miniChartsRoot = document.getElementById('mini-charts');
   var diagTarget = document.getElementById('diag-target');
   var diagCycles = document.getElementById('diag-cycles');
   var diagPing = document.getElementById('diag-ping');
@@ -50,7 +49,6 @@
   var diagEmpty = document.getElementById('diag-empty');
   var streamingMessage = document.getElementById('streaming-message');
   var streamingResults = document.getElementById('streaming-results');
-  var streamingHistory = document.getElementById('streaming-history');
   var editModeBtn = document.getElementById('edit-mode-btn');
   var tokenModal = document.getElementById('token-modal');
   var tokenInput = document.getElementById('token-input');
@@ -561,18 +559,350 @@
     });
   }
 
+
   /* ---------- metrics history ---------- */
-  var METRIC_SERIES = [
-    { key: 'cpu', label: 'metric.cpu', color: '#fbbf24',
-      value: function (p) { return Number(p.cpu_usage); } },
-    { key: 'mem', label: 'metric.mem', color: '#38bdf8',
-      value: function (p) { return p.mem_total > 0 ? Number(p.mem_used) / Number(p.mem_total) * 100 : null; } },
-    { key: 'disk', label: 'metric.disk', color: '#a78bfa',
-      value: function (p) { return p.disk_total > 0 ? Number(p.disk_used) / Number(p.disk_total) * 100 : null; } }
+  var BANDWIDTH_DOWN = '#34d399';
+  var BANDWIDTH_UP = '#38bdf8';
+  var DISK_WRITE_COLOR = '#a78bfa';
+  var DISK_READ_COLOR = '#f472b6';
+
+  // 4 tiles in one row: CPU / 内存 / 磁盘读写 / 带宽
+  var METRIC_TILES = [
+    { label: 'metric.cpu', icon: '▦', color: '#fbbf24',
+      value: function (p) { return Number(p.cpu_usage); },
+      format: function (v) { return v == null || !Number.isFinite(v) ? '—' : v.toFixed(1) + '%'; } },
+    { label: 'metric.mem', icon: '▥', color: '#38bdf8',
+      value: function (p) { return p.mem_total > 0 ? Number(p.mem_used) / Number(p.mem_total) * 100 : null; },
+      format: function (v) { return v == null || !Number.isFinite(v) ? '—' : v.toFixed(1) + '%'; } },
+    { label: 'metric.diskIo', icon: '◫', color: DISK_WRITE_COLOR,
+      value: function (p) { return p; },
+      format: function (p) { return p == null ? '—' : '读 ' + fmtMbps(Number(p.disk_read_bps)) + ' · 写 ' + fmtMbps(Number(p.disk_write_bps)); } }
   ];
+
+  // 2x2 grid of mini trend charts: CPU / 内存 / 磁盘写入 / 带宽(down+up)
+  var MINI_CHARTS = [
+    { key: 'cpu', title: 'metric.cpu', rate: false,
+      series: [{ key: 'cpu', label: 'metric.cpu', color: '#fbbf24',
+        value: function (p) { return Number(p.cpu_usage); } }] },
+    { key: 'mem', title: 'metric.mem', rate: false,
+      series: [{ key: 'mem', label: 'metric.mem', color: '#38bdf8',
+        value: function (p) { return p.mem_total > 0 ? Number(p.mem_used) / Number(p.mem_total) * 100 : null; } }] },
+    { key: 'disk', title: 'metric.diskIo', rate: true,
+      series: [
+        { key: 'read', label: 'metric.diskRead', color: DISK_READ_COLOR,
+          value: function (p) { return Number(p.disk_read_bps); } },
+        { key: 'write', label: 'metric.diskWrite', color: DISK_WRITE_COLOR,
+          value: function (p) { return Number(p.disk_write_bps); } }
+      ] },
+    { key: 'bandwidth', title: 'history.bandwidth', rate: true,
+      series: [
+        { key: 'down', label: 'history.down', color: BANDWIDTH_DOWN,
+          value: function (p) { return Number(p.net_rx_bps); } },
+        { key: 'up', label: 'history.up', color: BANDWIDTH_UP,
+          value: function (p) { return Number(p.net_tx_bps); } }
+      ] }
+  ];
+
+  function fmtMbps(bps) {
+    if (!Number.isFinite(bps) || bps <= 0) return '0';
+    var mbps = bps / 1e6;
+    if (mbps >= 100) return Math.round(mbps) + 'M';
+    if (mbps >= 1) return mbps.toFixed(1) + 'M';
+    return Math.round(bps / 1e3) + 'K';
+  }
+
+  function latestMetricPoint() {
+    var best = null;
+    metricsChartData.forEach(function (p) {
+      if (!best || Number(p.ts) > Number(best.ts)) best = p;
+    });
+    return best;
+  }
+
+  function renderMetricTiles() {
+    metricTiles.innerHTML = '';
+    var p = latestMetricPoint();
+    if (!p) return;
+    METRIC_TILES.forEach(function (tile) {
+      var v = tile.value(p);
+      var el = document.createElement('div');
+      el.className = 'metric-tile';
+      var icon = document.createElement('span');
+      icon.className = 'metric-tile-icon';
+      icon.style.color = tile.color;
+      icon.style.borderColor = tile.color;
+      icon.textContent = tile.icon;
+      var info = document.createElement('div');
+      info.className = 'metric-tile-info';
+      var label = document.createElement('span');
+      label.className = 'metric-tile-label';
+      label.textContent = t(tile.label);
+      var value = document.createElement('span');
+      value.className = 'metric-tile-value';
+      value.textContent = tile.format(v);
+      info.appendChild(label);
+      info.appendChild(value);
+      el.appendChild(icon);
+      el.appendChild(info);
+      metricTiles.appendChild(el);
+    });
+    var bw = document.createElement('div');
+    bw.className = 'metric-tile';
+    var bwIcon = document.createElement('span');
+    bwIcon.className = 'metric-tile-icon';
+    bwIcon.style.color = BANDWIDTH_DOWN;
+    bwIcon.style.borderColor = BANDWIDTH_DOWN;
+    bwIcon.textContent = '⇅';
+    var bwInfo = document.createElement('div');
+    bwInfo.className = 'metric-tile-info';
+    var bwLabel = document.createElement('span');
+    bwLabel.className = 'metric-tile-label';
+    bwLabel.textContent = t('history.bandwidth');
+    var bwVal = document.createElement('span');
+    bwVal.className = 'metric-tile-value';
+    bwVal.textContent = '↓ ' + fmtMbps(Number(p.net_rx_bps)) + ' · ↑ ' + fmtMbps(Number(p.net_tx_bps));
+    bwInfo.appendChild(bwLabel);
+    bwInfo.appendChild(bwVal);
+    bw.appendChild(bwIcon);
+    bw.appendChild(bwInfo);
+    metricTiles.appendChild(bw);
+  }
+
+  // Build the 2x2 mini-chart grid once; each cell gets a canvas, tooltip, guide.
+  function buildMiniCharts() {
+    miniChartsRoot.innerHTML = '';
+    MINI_CHARTS.forEach(function (cfg) {
+      var cell = document.createElement('div');
+      cell.className = 'mini-chart';
+      var head = document.createElement('div');
+      head.className = 'mini-chart-head';
+      head.appendChild(node_('span', 'mini-chart-title', t(cfg.title)));
+      cell.appendChild(head);
+      var wrap = document.createElement('div');
+      wrap.className = 'mini-chart-body';
+      var canvas = document.createElement('canvas');
+      var tip = document.createElement('div');
+      tip.className = 'chart-tip';
+      tip.hidden = true;
+      var guide = document.createElement('div');
+      guide.className = 'chart-guide';
+      guide.hidden = true;
+      var legend = document.createElement('div');
+      legend.className = 'mini-chart-legend';
+      wrap.appendChild(canvas);
+      wrap.appendChild(tip);
+      wrap.appendChild(guide);
+      cell.appendChild(wrap);
+      cell.appendChild(legend);
+      miniChartsRoot.appendChild(cell);
+      cfg.canvas = canvas;
+      cfg.tip = tip;
+      cfg.guide = guide;
+      cfg.legend = legend;
+      cfg.hover = null;
+      var bind = cfg;
+      wrap.addEventListener('mousemove', function (ev) { miniHoverMove(bind, ev); });
+      wrap.addEventListener('mouseleave', function () { miniHoverLeave(bind); });
+    });
+  }
+
+  function node_(tag, className, text) {
+    var el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+
+  function fmtChartValue(v, rate) {
+    if (v == null || !Number.isFinite(v)) return '—';
+    return rate ? fmtMbps(v) + '/s' : v.toFixed(1) + '%';
+  }
+
+  function drawMiniChart(cfg) {
+    var canvas = cfg.canvas;
+    var rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(rect.width * ratio);
+    canvas.height = Math.round(rect.height * ratio);
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    cfg.legend.innerHTML = '';
+
+    var points = metricsChartData.filter(function (p) { return Number.isFinite(Number(p.ts)); });
+    if (!points.length) return;
+
+    var nowSec = Math.floor(Date.now() / 1000);
+    var minTs = nowSec - (CHART_RANGE[metricsRange.value] || 86400);
+    var maxTs = nowSec;
+    var left = 30, right = 8, top = 10, plotBottom = rect.height - 18;
+    var plotWidth = Math.max(1, rect.width - left - right);
+    var plotHeight = Math.max(1, plotBottom - top);
+    var xAt = function (ts) { return left + (Number(ts) - minTs) / (maxTs - minTs) * plotWidth; };
+    var maxV = cfg.rate ? 1 : 100;
+    points.forEach(function (p) {
+      cfg.series.forEach(function (s) {
+        var v = s.value(p);
+        if (Number.isFinite(v)) maxV = Math.max(maxV, v / (cfg.rate ? 1e6 : 1));
+      });
+    });
+    if (cfg.rate) maxV = Math.ceil(maxV * 10) / 10;
+    var yAt = function (v) { return top + (1 - v / maxV) * plotHeight; };
+    cfg.geom = { points: points, minTs: minTs, maxTs: maxTs, left: left, top: top, plotBottom: plotBottom, plotWidth: plotWidth, xAt: xAt, yAt: yAt, maxV: maxV };
+
+    ctx.lineWidth = 1;
+    ctx.font = '10px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
+    ctx.textBaseline = 'middle';
+    for (var line = 0; line <= 3; line++) {
+      var y = top + plotHeight * line / 3;
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(rect.width - right, y);
+      ctx.stroke();
+      ctx.fillStyle = '#64748b';
+      ctx.textAlign = 'right';
+      var label = cfg.rate ? (maxV * (1 - line / 3)).toFixed(1) + 'M' : Math.round(100 * (1 - line / 3)) + '%';
+      ctx.fillText(label, left - 5, y);
+    }
+    ctx.fillStyle = '#64748b';
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.fillText(formatMetricsTime(minTs), left, rect.height - 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(formatMetricsTime(maxTs), rect.width - right, rect.height - 4);
+
+    var sorted = points.slice().sort(function (a, b) { return Number(a.ts) - Number(b.ts); });
+    cfg.series.forEach(function (s) {
+      var line = [];
+      for (var i = 0; i < sorted.length; i++) {
+        var v = s.value(sorted[i]);
+        if (v == null || !Number.isFinite(v)) continue;
+        line.push([xAt(sorted[i].ts), yAt(Math.max(0, v / (cfg.rate ? 1e6 : 1)))]);
+      }
+      if (line.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(line[0][0], line[0][1]);
+      for (var j = 1; j < line.length; j++) ctx.lineTo(line[j][0], line[j][1]);
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+
+    if (cfg.hover) {
+      var ht = cfg.hover.ts;
+      cfg.series.forEach(function (s) {
+        if (s.key !== cfg.hover.key) return;
+        var line = [];
+        for (var i = 0; i < sorted.length; i++) {
+          var v = s.value(sorted[i]);
+          if (!Number.isFinite(v)) continue;
+          line.push([xAt(sorted[i].ts), yAt(Math.max(0, v / (cfg.rate ? 1e6 : 1)))]);
+        }
+        if (line.length) {
+          ctx.beginPath();
+          ctx.moveTo(line[0][0], line[0][1]);
+          for (var j = 1; j < line.length; j++) ctx.lineTo(line[j][0], line[j][1]);
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 3;
+          ctx.globalAlpha = 0.9;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+        var nearest = null, bestD = Infinity;
+        sorted.forEach(function (p) {
+          var v = s.value(p);
+          if (!Number.isFinite(v)) return;
+          var d = Math.abs(Number(p.ts) - ht);
+          if (d < bestD) { bestD = d; nearest = { x: xAt(p.ts), y: yAt(Math.max(0, v / (cfg.rate ? 1e6 : 1))) }; }
+        });
+        if (nearest) {
+          ctx.beginPath();
+          ctx.arc(nearest.x, nearest.y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = s.color;
+          ctx.fill();
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+          ctx.stroke();
+        }
+      });
+    }
+
+    cfg.series.forEach(function (s) {
+      var legend = document.createElement('span');
+      legend.className = 'chart-legend-item';
+      var swatch = document.createElement('span');
+      swatch.className = 'chart-swatch';
+      swatch.style.background = s.color;
+      var label = document.createElement('span');
+      label.textContent = t(s.label);
+      legend.appendChild(swatch);
+      legend.appendChild(label);
+      cfg.legend.appendChild(legend);
+    });
+  }
+
+  function miniHoverMove(cfg, ev) {
+    if (!cfg.geom || !cfg.geom.points.length) {
+      cfg.tip.hidden = true;
+      cfg.guide.hidden = true;
+      return;
+    }
+    var rect = cfg.canvas.getBoundingClientRect();
+    var x = ev.clientX - rect.left;
+    var y = ev.clientY - rect.top;
+    var g = cfg.geom;
+    var ts = g.minTs + (x - g.left) / g.plotWidth * (g.maxTs - g.minTs);
+    var best = null;
+    cfg.series.forEach(function (s) {
+      var nearest = null, md = Infinity;
+      g.points.forEach(function (p) {
+        var v = s.value(p);
+        if (!Number.isFinite(v)) return;
+        var d = Math.abs(Number(p.ts) - ts);
+        if (d < md) { md = d; nearest = p; }
+      });
+      if (!nearest) return;
+      var v = s.value(nearest);
+      var dy = Math.abs(g.yAt(Math.max(0, v / (cfg.rate ? 1e6 : 1))) - y);
+      if (!best || dy < best.dy) {
+        best = { key: s.key, label: s.label, point: nearest, value: v, dy: dy };
+      }
+    });
+    if (!best) {
+      cfg.tip.hidden = true;
+      cfg.guide.hidden = true;
+      return;
+    }
+    cfg.hover = { ts: Number(best.point.ts), key: best.key };
+    cfg.tip.textContent = formatMetricsTime(Number(best.point.ts)) + ' · ' + t(best.label) + ' ' + fmtChartValue(best.value, cfg.rate);
+    cfg.tip.hidden = false;
+    var tipLeft = x + 12;
+    if (tipLeft + cfg.tip.offsetWidth > rect.width - 8) tipLeft = x - cfg.tip.offsetWidth - 12;
+    cfg.tip.style.left = Math.max(4, tipLeft) + 'px';
+    cfg.tip.style.top = Math.max(4, y - 14) + 'px';
+    cfg.guide.style.left = Math.round(x) + 'px';
+    cfg.guide.style.top = g.top + 'px';
+    cfg.guide.style.height = Math.max(0, g.plotBottom - g.top) + 'px';
+    cfg.guide.hidden = false;
+    drawMiniChart(cfg);
+  }
+
+  function miniHoverLeave(cfg) {
+    cfg.hover = null;
+    cfg.tip.hidden = true;
+    cfg.guide.hidden = true;
+    drawMiniChart(cfg);
+  }
+
+  function drawAllMiniCharts() {
+    MINI_CHARTS.forEach(function (cfg) { drawMiniChart(cfg); });
+  }
 
   function loadMetricsHistory() {
     if (!entry) return;
+    if (!miniChartsRoot.firstChild) buildMiniCharts();
     var seq = ++metricsLoadId;
     var url = '/api/agents/' + hostId + '/history?range=' + encodeURIComponent(metricsRange.value);
     metricsMessage.textContent = t('common.loading');
@@ -580,12 +910,14 @@
       if (seq !== metricsLoadId) return;
       metricsChartData = Array.isArray(body.points) ? body.points : [];
       metricsMessage.textContent = metricsChartData.length ? '' : t('common.noData');
-      drawMetricsChart();
+      drawAllMiniCharts();
+      renderMetricTiles();
     }).catch(function (error) {
       if (seq !== metricsLoadId) return;
       metricsChartData = [];
       metricsMessage.textContent = t('common.error') + ': ' + error.message;
-      drawMetricsChart();
+      drawAllMiniCharts();
+      renderMetricTiles();
     });
   }
 
@@ -597,82 +929,6 @@
     var h = date.getHours();
     var m = date.getMinutes();
     return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
-  }
-
-  function drawMetricsChart() {
-    var rect = metricsChart.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    var ratio = window.devicePixelRatio || 1;
-    metricsChart.width = Math.round(rect.width * ratio);
-    metricsChart.height = Math.round(rect.height * ratio);
-    var ctx = metricsChart.getContext('2d');
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
-    metricsLegend.innerHTML = '';
-    metricsTip.hidden = true;
-
-    var points = metricsChartData.filter(function (point) { return Number.isFinite(Number(point.ts)); });
-    if (!points.length) return;
-
-    var nowSec = Math.floor(Date.now() / 1000);
-    var minTs = nowSec - (CHART_RANGE[metricsRange.value] || 86400);
-    var maxTs = nowSec;
-    var left = 42, right = 12, top = 12, plotBottom = rect.height - 26;
-    var plotWidth = Math.max(1, rect.width - left - right);
-    var plotHeight = Math.max(1, plotBottom - top);
-    var xAt = function (ts) { return left + (Number(ts) - minTs) / (maxTs - minTs) * plotWidth; };
-    var yAt = function (pct) { return top + (1 - pct / 100) * plotHeight; };
-
-    ctx.lineWidth = 1;
-    ctx.font = '10px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
-    ctx.textBaseline = 'middle';
-    for (var line = 0; line <= 4; line++) {
-      var y = top + plotHeight * line / 4;
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
-      ctx.beginPath();
-      ctx.moveTo(left, y);
-      ctx.lineTo(rect.width - right, y);
-      ctx.stroke();
-      ctx.fillStyle = '#64748b';
-      ctx.textAlign = 'right';
-      ctx.fillText(Math.round(100 * (1 - line / 4)) + '%', left - 6, y);
-    }
-    ctx.fillStyle = '#64748b';
-    ctx.textBaseline = 'alphabetic';
-    ctx.textAlign = 'left';
-    ctx.fillText(formatMetricsTime(minTs), left, rect.height - 5);
-    ctx.textAlign = 'right';
-    ctx.fillText(formatMetricsTime(maxTs), rect.width - right, rect.height - 5);
-
-    var sorted = points.slice().sort(function (a, b) { return Number(a.ts) - Number(b.ts); });
-    METRIC_SERIES.forEach(function (series) {
-      var line = [];
-      for (var i = 0; i < sorted.length; i++) {
-        var v = series.value(sorted[i]);
-        if (v == null || !Number.isFinite(v)) continue;
-        line.push([xAt(sorted[i].ts), yAt(Math.max(0, Math.min(100, v)))]);
-      }
-      if (line.length < 2) return;
-      ctx.beginPath();
-      ctx.moveTo(line[0][0], line[0][1]);
-      for (var j = 1; j < line.length; j++) ctx.lineTo(line[j][0], line[j][1]);
-      ctx.strokeStyle = series.color;
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
-    });
-
-    METRIC_SERIES.forEach(function (series) {
-      var legend = document.createElement('span');
-      legend.className = 'chart-legend-item';
-      var swatch = document.createElement('span');
-      swatch.className = 'chart-swatch';
-      swatch.style.background = series.color;
-      var label = document.createElement('span');
-      label.textContent = t(series.label);
-      legend.appendChild(swatch);
-      legend.appendChild(label);
-      metricsLegend.appendChild(legend);
-    });
   }
 
   /* ---------- diagnostics ---------- */
@@ -994,54 +1250,11 @@
       renderUnlock();
       streamingMessage.textContent = '';
       renderServiceResults(results);
-      renderStreamingHistory(Array.isArray(body.history) ? body.history : []);
     }).catch(function (error) {
       if (seq !== streamingLoadId) return;
       streamingResults.innerHTML = '';
-      streamingHistory.innerHTML = '';
-      streamingHistory.hidden = true;
       streamingMessage.textContent = t('common.error') + ': ' + error.message;
     });
-  }
-
-  function renderStreamingHistory(history) {
-    streamingHistory.innerHTML = '';
-    if (!history.length) {
-      streamingHistory.hidden = true;
-      return;
-    }
-    streamingHistory.hidden = false;
-    var title = document.createElement('h4');
-    title.className = 'streaming-history-title';
-    title.textContent = t('streaming.history');
-    streamingHistory.appendChild(title);
-    var list = document.createElement('ul');
-    list.className = 'streaming-history-list';
-    // newest first, grouped by service, capped at a reasonable scroll area
-    var shown = 0;
-    history.forEach(function (row) {
-      if (shown >= 60) return;
-      shown++;
-      var item = document.createElement('li');
-      var status = P.serviceStatus({ status: row.status });
-      var name = document.createElement('span');
-      name.className = 'streaming-history-service';
-      name.textContent = row.service;
-      var when = document.createElement('span');
-      when.className = 'streaming-history-time';
-      var dt = new Date(row.ts * 1000);
-      var hh = dt.getHours(), mm = dt.getMinutes();
-      when.textContent = dt.getFullYear() + '-' + ((dt.getMonth() + 1) < 10 ? '0' : '') + (dt.getMonth() + 1) + '-' + (dt.getDate() < 10 ? '0' : '') + dt.getDate()
-        + ' ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
-      var st = document.createElement('span');
-      st.className = 'streaming-history-status ' + P.statusClass(status);
-      st.textContent = t('streaming.status.' + status);
-      item.appendChild(name);
-      item.appendChild(when);
-      item.appendChild(st);
-      list.appendChild(item);
-    });
-    streamingHistory.appendChild(list);
   }
 
   /* ---------- ws ---------- */
@@ -1295,34 +1508,6 @@
   pingTask.addEventListener('change', function () { loadPingHistory(false); });
   pingRange.addEventListener('change', function () { loadPingHistory(false); });
   metricsRange.addEventListener('change', loadMetricsHistory);
-  var metricsChartWrap = document.getElementById('metrics-chart-wrap');
-  metricsChartWrap.addEventListener('mousemove', function (ev) {
-    if (!metricsChartData.length) return;
-    var rect = metricsChart.getBoundingClientRect();
-    var nowSec = Math.floor(Date.now() / 1000);
-    var minTs = nowSec - (CHART_RANGE[metricsRange.value] || 86400);
-    var maxTs = nowSec;
-    var left = 42;
-    var x = ev.clientX - rect.left;
-    var ts = minTs + (x - left) / (rect.width - left - 12) * (maxTs - minTs);
-    var nearest = null, bestD = Infinity;
-    metricsChartData.forEach(function (p) {
-      var d = Math.abs(Number(p.ts) - ts);
-      if (d < bestD) { bestD = d; nearest = p; }
-    });
-    if (!nearest) return;
-    metricsTip.hidden = false;
-    metricsTip.style.left = Math.min(rect.width - 150, Math.max(0, x)) + 'px';
-    metricsTip.style.top = '8px';
-    var parts = [formatMetricsTime(nearest.ts)];
-    METRIC_SERIES.forEach(function (series) {
-      var v = series.value(nearest);
-      if (v == null || !Number.isFinite(v)) return;
-      parts.push(t(series.label) + ' ' + Math.round(v * 10) / 10 + '%');
-    });
-    metricsTip.textContent = parts.join(' · ');
-  });
-  metricsChartWrap.addEventListener('mouseleave', function () { metricsTip.hidden = true; });
   diagPing.addEventListener('click', function () { runDiagnostic('ping'); });
   diagTraceroute.addEventListener('click', function () { runDiagnostic('traceroute'); });
   diagMtr.addEventListener('click', function () { runDiagnostic('mtr'); });
@@ -1429,7 +1614,7 @@
     requestAnimationFrame(function () {
       chartResizePending = false;
       drawPingChart();
-      drawMetricsChart();
+      drawAllMiniCharts();
     });
   });
 

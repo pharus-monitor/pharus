@@ -122,6 +122,8 @@ mod tests {
             uptime: 0,
             net_rx_total: rx_total,
             net_tx_total: tx_total,
+            disk_write_bps: 0,
+            disk_read_bps: 0,
         }
     }
 
