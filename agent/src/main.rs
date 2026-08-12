@@ -204,6 +204,7 @@ async fn collect_mem_desc() -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_total: u64, tx_total: u64, disk_write_diff: u64, disk_read_diff: u64, interval_s: u64) -> Metrics {
     let cpu_usage = sys.global_cpu_usage();
     let mut disk_used = 0u64;
