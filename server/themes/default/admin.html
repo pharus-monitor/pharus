@@ -119,6 +119,27 @@
     </div>
   </div>
 
+  <div class="modal-mask" id="update-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="update-title">—</h3>
+        <button class="modal-x" id="update-x" type="button" aria-label="关闭">×</button>
+      </div>
+      <div id="update-body">
+        <label class="field">
+          <span data-i18n="update.version">版本</span>
+          <select id="update-version"></select>
+        </label>
+        <pre class="update-notes" id="update-notes" hidden></pre>
+        <p class="modal-err" id="update-err" hidden></p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="update-cancel" type="button" data-i18n="admin.cancel">取消</button>
+          <button class="btn primary" id="update-confirm" type="button" data-i18n="update.trigger">更新</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="common.js?v=0.6.1"></script>
   <script src="admin.js?v=0.6.1"></script>
   <script>

@@ -51,6 +51,7 @@ pub fn router(state: SharedState) -> Router<SharedState> {
         .route("/api/admin/tasks/:id/run", post(run_task))
         .route("/api/admin/task-results", get(task_results))
         .route("/api/admin/updates", get(list_updates))
+        .route("/api/admin/update", post(trigger_server_update))
         .route("/api/admin/agents/:id/update", post(trigger_update))
         .route(
             "/api/admin/alert-rules",
@@ -362,6 +363,7 @@ async fn read_settings(State(state): State<SharedState>) -> Response {
     let get = |key: &str| db::get_setting(&conn, key).ok().flatten();
     Json(serde_json::json!({
         "trusted_proxies": get("trusted_proxies").unwrap_or_default(),
+        "update_manifest_url": get("update_manifest_url").unwrap_or_default(),
     }))
     .into_response()
 }
@@ -394,6 +396,12 @@ async fn update_setting(
             }
         }
         "site_name" | "site_url" => {}
+        "update_manifest_url" => {
+            let v = body.value.trim();
+            if !v.is_empty() && !(v.starts_with("http://") || v.starts_with("https://")) {
+                return bad("update_manifest_url must be a valid http(s) URL");
+            }
+        }
         "trusted_proxies" => {
             for spec in body.value.split(',') {
                 let spec = spec.trim();
@@ -550,7 +558,7 @@ async fn rename_agent(
 }
 
 /// Versions the online-update manifest offers, and which platforms each one
-/// has an asset for.
+/// has a server / agent asset for.
 async fn list_updates(State(state): State<SharedState>) -> Response {
     let manifest = crate::updates::load_manifest(&state).await;
     let versions: Vec<_> = manifest
@@ -559,11 +567,47 @@ async fn list_updates(State(state): State<SharedState>) -> Response {
         .map(|v| {
             serde_json::json!({
                 "version": v.version,
-                "platforms": v.assets.keys().collect::<Vec<_>>(),
+                "server_platforms": v.server.keys().collect::<Vec<_>>(),
+                "agent_platforms": v.agent.keys().collect::<Vec<_>>(),
+                "notes": v.notes,
             })
         })
         .collect();
     Json(versions).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ServerUpdateBody {
+    version: String,
+}
+
+/// Download and apply a new server (panel) build for this host, then restart.
+async fn trigger_server_update(
+    State(state): State<SharedState>,
+    Json(body): Json<ServerUpdateBody>,
+) -> Response {
+    let manifest = crate::updates::load_manifest(&state).await;
+    let platform = crate::updates::server_platform();
+    if crate::updates::find_asset(&manifest, &body.version, "server", &platform).is_none() {
+        return err(
+            StatusCode::NOT_FOUND,
+            &format!("版本 {ver} 没有服务器 {platform} 安装包", ver = body.version),
+        );
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let version = body.version.clone();
+    let rid = request_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::updates::apply_server_update(&state, version).await {
+            tracing::warn!(error = %e, request_id = %rid, "server update failed");
+        }
+    });
+    Json(serde_json::json!({
+        "request_id": request_id,
+        "version": body.version,
+        "platform": platform,
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -591,7 +635,7 @@ async fn trigger_update(
         return err(StatusCode::CONFLICT, "节点未上报平台信息，无法选择安装包");
     };
     let manifest = crate::updates::load_manifest(&state).await;
-    let Some(asset) = crate::updates::find_asset(&manifest, &body.version, &platform) else {
+    let Some(asset) = crate::updates::find_asset(&manifest, &body.version, "agent", &platform) else {
         return err(
             StatusCode::NOT_FOUND,
             &format!("版本 {ver} 没有 {platform} 平台的安装包", ver = body.version),

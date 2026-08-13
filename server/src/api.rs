@@ -233,6 +233,7 @@ async fn meta(State(state): State<SharedState>) -> Response {
     };
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "platform": crate::updates::server_platform(),
         "theme": theme,
         "features": enabled,
         "admin_enabled": admin_enabled,

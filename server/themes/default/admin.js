@@ -1394,51 +1394,139 @@
       }).catch(showError);
     }
 
+    var updateTarget = null;
+    var updateLang = 'zh-CN';
+    var updateVersions = [];
+
+    function renderUpdateNotes() {
+      var notesEl = document.getElementById('update-notes');
+      var select = document.getElementById('update-version');
+      var v = updateVersions.filter(function (x) { return x.version === select.value; })[0];
+      var notes = (v && v.notes) ? v.notes : {};
+      var text = notes[updateLang] || notes['en'] || notes['zh-CN'] || '';
+      notesEl.textContent = text;
+      notesEl.hidden = !text;
+    }
+
+    function filterUpdateVersions(versions, kind, platform) {
+      return versions.filter(function (v) {
+        var plats = kind === 'server' ? v.server_platforms : v.agent_platforms;
+        return Array.isArray(plats) && plats.indexOf(platform) !== -1;
+      });
+    }
+
+    function openUpdateModal(target, versions) {
+      var select = document.getElementById('update-version');
+      var err = document.getElementById('update-err');
+      var filtered = filterUpdateVersions(versions, target.kind, target.platform);
+      document.getElementById('update-title').textContent = t('update.selectVersion') + ' · ' + target.label;
+      select.innerHTML = '';
+      filtered.forEach(function (v) { select.appendChild(new Option(v.version, v.version)); });
+      err.hidden = filtered.length > 0;
+      if (!filtered.length) err.textContent = t('update.noVersions');
+      document.getElementById('update-confirm').disabled = filtered.length === 0;
+      updateTarget = filtered.length ? target : null;
+      updateVersions = filtered;
+      document.getElementById('update-modal').hidden = false;
+      renderUpdateNotes();
+    }
+
+    function closeUpdateModal() {
+      document.getElementById('update-modal').hidden = true;
+      updateTarget = null;
+    }
+
+    function confirmUpdate() {
+      if (!updateTarget) return;
+      var version = document.getElementById('update-version').value;
+      var btn = document.getElementById('update-confirm');
+      var err = document.getElementById('update-err');
+      btn.disabled = true;
+      err.hidden = true;
+      var t = updateTarget;
+      var url = t.kind === 'server' ? '/api/admin/update' : '/api/admin/agents/' + t.agentId + '/update';
+      options.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version: version })
+      }).then(function () {
+        closeUpdateModal();
+        if (t.kind === 'server') {
+          var hint = node('p', 'panel-message', t('update.restarting'));
+          options.content.insertBefore(hint, options.content.firstChild);
+        } else {
+          loadView();
+        }
+      }).catch(function (error) {
+        err.textContent = t('common.error') + ': ' + error.message;
+        err.hidden = false;
+      }).then(function () { btn.disabled = false; });
+    }
+
     function renderUpdates() {
       setLoading(); clearError();
-      Promise.all([options.request('/api/admin/updates'), options.request('/api/admin/agents')]).then(function (values) {
+      Promise.all([
+        options.request('/api/meta'),
+        options.request('/api/admin/updates'),
+        options.request('/api/admin/agents')
+      ]).then(function (values) {
         if (!active || currentView !== 'updates') return;
-        var versions = Array.isArray(values[0]) ? values[0] : [];
-        var agents = Array.isArray(values[1]) ? values[1] : [];
+        var meta = values[0] || {};
+        var versions = Array.isArray(values[1]) ? values[1] : [];
+        var agents = Array.isArray(values[2]) ? values[2] : [];
+        var serverVersion = meta.version || '—';
+        var serverPlatform = meta.platform || '';
+        updateLang = meta.default_language || 'zh-CN';
         options.content.innerHTML = '';
         options.content.appendChild(toolbar(t('admin.updates'), null));
+
+        // panel update section
+        var panelBox = node('div', 'feature-defaults');
+        panelBox.appendChild(node('span', 'inline-status', t('update.panel') + ' · ' + serverVersion + ' (' + serverPlatform + ')'));
+        var checkBtn = actionButton(t('update.check'), function () {
+          options.request('/api/admin/updates').then(function (fresh) {
+            openUpdateModal({
+              kind: 'server',
+              label: t('update.panel'),
+              platform: serverPlatform
+            }, Array.isArray(fresh) ? fresh : []);
+          }).catch(showError);
+        }, 'btn primary');
+        var panelStatus = node('span', 'inline-status');
+        panelBox.appendChild(checkBtn);
+        panelBox.appendChild(panelStatus);
+        options.content.appendChild(panelBox);
+
+        // auto-check: hint when a newer server version is available
+        var latest = filterUpdateVersions(versions, 'server', serverPlatform)[0];
+        if (latest && latest.version !== serverVersion) {
+          panelStatus.textContent = t('update.newVersion') + ' ' + latest.version;
+          panelStatus.className = 'inline-status ok';
+        }
+
         if (!versions.length) {
           options.content.appendChild(node('p', 'admin-empty', t('update.noVersions')));
           return;
         }
-        var versionList = versions.map(function (v) { return v.version; });
+
         var rows = agents.map(function (agent) {
-          var versionSelect = node('select');
-          versionList.forEach(function (v) {
-            var opt = node('option', '', v);
-            opt.value = v;
-            versionSelect.appendChild(opt);
-          });
-          var status = node('span', 'inline-status');
           var run = actionButton(t('update.trigger'), function () {
             if (!agent.online) {
-              status.textContent = t('update.offline');
-              status.className = 'inline-status error';
+              var status = node('span', 'inline-status error', t('update.offline'));
+              var cell = run.parentElement;
+              cell.insertBefore(status, run.nextSibling);
+              setTimeout(function () { status.remove(); }, 2500);
               return;
             }
-            run.disabled = true;
-            status.textContent = t('common.saving');
-            options.request('/api/admin/agents/' + agent.agent_id + '/update', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ version: versionSelect.value })
-            }).then(function () {
-              status.textContent = t('update.sent');
-              status.className = 'inline-status ok';
-            }).catch(function (error) {
-              status.textContent = t('common.error') + ': ' + error.message;
-              status.className = 'inline-status error';
-            }).then(function () { run.disabled = false; });
+            openUpdateModal({
+              kind: 'agent',
+              label: agent.name || ('Agent #' + agent.agent_id),
+              agentId: agent.agent_id,
+              platform: agent.platform
+            }, versions);
           }, 'btn primary');
           var actions = node('div', 'table-actions');
-          actions.appendChild(versionSelect);
           actions.appendChild(run);
-          actions.appendChild(status);
           return [
             agent.name || ('Agent #' + agent.agent_id),
             agent.app_version || '—',
@@ -1480,6 +1568,13 @@
     document.getElementById('entity-cancel').addEventListener('click', closeModal);
     options.modal.querySelectorAll('[data-close]').forEach(function (el) {
       el.addEventListener('click', closeModal);
+    });
+    document.getElementById('update-x').addEventListener('click', closeUpdateModal);
+    document.getElementById('update-cancel').addEventListener('click', closeUpdateModal);
+    document.getElementById('update-confirm').addEventListener('click', confirmUpdate);
+    document.getElementById('update-version').addEventListener('change', renderUpdateNotes);
+    document.getElementById('update-modal').addEventListener('click', function (ev) {
+      if (ev.target === document.getElementById('update-modal')) closeUpdateModal();
     });
     options.form.addEventListener('submit', function (event) {
       event.preventDefault();

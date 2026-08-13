@@ -2,7 +2,27 @@
   "versions": [
     {
       "version": "0.6.1",
-      "assets": {
+      "notes": {
+        "zh-CN": "1. 自定义下拉组件：所有下拉框改为统一样式的自定义组件，支持深浅主题、键盘导航、禁用态、宽度按最长选项自适应\n2. 指标历史面板：CPU / 内存 / 磁盘读写 / 带宽拆分为 2×2 迷你图表，时间范围下拉移至面板标题栏\n3. 磁盘读写速率：agent 上报、服务端存储磁盘读写速率，并显示在历史图表\n4. 无 .html 地址栏：/host、/admin 不再需要 .html 后缀，首页为 /\n5. 受信任反代：同机反向代理的转发头被信任，正确记录真实客户端 IP\n6. 流媒体检测记录：后台新增菜单，跨主机查看最近检测结果\n7. Agent Token 查看：主机列表可直接查看 / 重新签发 agent 通信 token",
+        "en": "1. Custom dropdown component: every select is now a theme-styled dropdown with keyboard navigation, disabled states and width that fits the longest option\n2. Metrics panel: CPU / memory / disk read+write / bandwidth split into a 2×2 mini-chart grid; the time-range control moved into the panel header\n3. Disk read/write rates: agent reports and server stores disk throughput, shown in the history charts\n4. Clean URLs: /host and /admin no longer need a .html suffix; the homepage stays /\n5. Trusted reverse proxy: same-host reverse-proxy forwarding headers are trusted so the real client IP is recorded\n6. Streaming detection log: an admin menu for recent detection results across all hosts\n7. Agent tokens: view and re-issue agent communication tokens from the host list",
+        "ja": "1. カスタムドロップダウン：すべての select をテーマ対応のカスタムコンポーネントに置き換え（キーボード操作、無効状態、最長オプションに合わせた幅）\n2. メトリクスパネル：CPU / メモリ / ディスク読み書き / 帯域を 2×2 のミニチャートに分割、時間範囲はパネルヘッダーへ移動\n3. ディスク読み書きレート：agent が報告しサーバーが保存、履歴グラフに表示\n4. クリーン URL：/host・/admin は .html 拡張子不要、ホームは /\n5. 信頼済みリバースプロキシ：同一ホストのリバースプロキシの転送ヘッダーを信頼し実クライアント IP を記録\n6. ストリーミング検出ログ：管理メニューに全ホストの最近の検出結果\n7. Agent トークン：ホスト一覧で agent 通信トークンの表示・再発行",
+        "ru": "1. Кастомные дропдауны: все select заменены на компонент в стиле темы (клавиатура, отключённое состояние, ширина по самому длинному варианту)\n2. Панель метрик: CPU / память / чтение-запись диска / трафик разбиты на сетку 2×2; селектор времени — в заголовке панели\n3. Скорость чтения/записи диска: агент сообщает, сервер хранит, показывается на графиках истории\n4. Чистые URL: /host и /admin без расширения .html, главная — /\n5. Доверенный reverse-proxy: заголовки прокси на том же хосте доверяются, записывается реальный IP клиента\n6. Журнал стриминга: меню админки с последними результатами проверок по всем хостам\n7. Токены агента: просмотр и перевыпуск токенов связи в списке хостов"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-linux-x86_64.tar.gz",
+          "sha256": "02dc23c65cf7f99ce8d47159858b9f3b6f00891648929b0e7118783a306bd9e2"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-linux-aarch64.tar.gz",
+          "sha256": "a1c9654027265c34b02af0d684829e922e309314bc1c9d8ced77005edde2ffe8"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-linux-i686.tar.gz",
+          "sha256": "b0535b6001e0b5ab0d4c6c7f65c88646117c09c1602cf3182d682c69e39b3e98"
+        }
+      },
+      "agent": {
         "linux-x86_64": {
           "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-x86_64.tar.gz",
           "sha256": "b87511cb879af75e3b3f1232c34774a83126603d0464acaee4072c43294599ed"
