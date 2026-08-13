@@ -1,0 +1,25 @@
+{
+  "versions": [
+    {
+      "version": "0.6.1",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "b87511cb879af75e3b3f1232c34774a83126603d0464acaee4072c43294599ed"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "340e23e85ad4d731235d4ce12c1870f5541ad6a1f8baf6642407e5d9d39a3d49"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-i686.tar.gz",
+          "sha256": "a4d27f746e17623a098ef2a21df2230c13c0cee6828ac099f96d8d9b15898db2"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-windows-x86_64.exe",
+          "sha256": "f2e5db47e0e154a3cd676770894b376739ceaf7cae80071add9ed4ca179217d7"
+        }
+      }
+    }
+  ]
+}

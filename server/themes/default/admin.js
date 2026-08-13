@@ -1394,6 +1394,64 @@
       }).catch(showError);
     }
 
+    function renderUpdates() {
+      setLoading(); clearError();
+      Promise.all([options.request('/api/admin/updates'), options.request('/api/admin/agents')]).then(function (values) {
+        if (!active || currentView !== 'updates') return;
+        var versions = Array.isArray(values[0]) ? values[0] : [];
+        var agents = Array.isArray(values[1]) ? values[1] : [];
+        options.content.innerHTML = '';
+        options.content.appendChild(toolbar(t('admin.updates'), null));
+        if (!versions.length) {
+          options.content.appendChild(node('p', 'admin-empty', t('update.noVersions')));
+          return;
+        }
+        var versionList = versions.map(function (v) { return v.version; });
+        var rows = agents.map(function (agent) {
+          var versionSelect = node('select');
+          versionList.forEach(function (v) {
+            var opt = node('option', '', v);
+            opt.value = v;
+            versionSelect.appendChild(opt);
+          });
+          var status = node('span', 'inline-status');
+          var run = actionButton(t('update.trigger'), function () {
+            if (!agent.online) {
+              status.textContent = t('update.offline');
+              status.className = 'inline-status error';
+              return;
+            }
+            run.disabled = true;
+            status.textContent = t('common.saving');
+            options.request('/api/admin/agents/' + agent.agent_id + '/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ version: versionSelect.value })
+            }).then(function () {
+              status.textContent = t('update.sent');
+              status.className = 'inline-status ok';
+            }).catch(function (error) {
+              status.textContent = t('common.error') + ': ' + error.message;
+              status.className = 'inline-status error';
+            }).then(function () { run.disabled = false; });
+          }, 'btn primary');
+          var actions = node('div', 'table-actions');
+          actions.appendChild(versionSelect);
+          actions.appendChild(run);
+          actions.appendChild(status);
+          return [
+            agent.name || ('Agent #' + agent.agent_id),
+            agent.app_version || '—',
+            agent.platform || '—',
+            actions
+          ];
+        });
+        options.content.appendChild(makeTable([
+          t('common.agent'), t('update.current'), t('update.platform'), t('common.actions')
+        ], rows));
+      }).catch(showError);
+    }
+
     function loadView() {
       if (!active) return;
       if (currentView === 'alerts') renderAlerts();
@@ -1407,6 +1465,7 @@
       else if (currentView === 'iperf3Log') renderIperf3Log();
       else if (currentView === 'themes') renderThemes();
       else if (currentView === 'settings') renderSettings();
+      else if (currentView === 'updates') renderUpdates();
     }
 
     options.root.querySelectorAll('[data-admin-view]').forEach(function (tab) {

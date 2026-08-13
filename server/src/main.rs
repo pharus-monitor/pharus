@@ -10,6 +10,7 @@ mod notify;
 mod regions;
 mod state;
 mod themes;
+mod updates;
 mod ws;
 
 use anyhow::{Context, Result};
@@ -228,6 +229,7 @@ async fn serve(
         diag_pending: Mutex::new(HashMap::new()),
         diag_by_ip: Mutex::new(HashMap::new()),
         iperf3_by_agent: Mutex::new(HashMap::new()),
+        update_cache: Mutex::new(None),
     });
 
     alerts::spawn(state.clone());

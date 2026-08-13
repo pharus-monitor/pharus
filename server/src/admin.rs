@@ -50,6 +50,8 @@ pub fn router(state: SharedState) -> Router<SharedState> {
         .route("/api/admin/tasks/:id", put(update_task).delete(delete_task))
         .route("/api/admin/tasks/:id/run", post(run_task))
         .route("/api/admin/task-results", get(task_results))
+        .route("/api/admin/updates", get(list_updates))
+        .route("/api/admin/agents/:id/update", post(trigger_update))
         .route(
             "/api/admin/alert-rules",
             get(list_alert_rules).post(create_alert_rule),
@@ -505,6 +507,8 @@ async fn list_agents(State(state): State<SharedState>) -> Response {
                 "features": a.features,
                 "billing": a.billing,
                 "token": tokens.get(id),
+                "app_version": a.app_version,
+                "platform": a.platform,
             })
         })
         .collect();
@@ -543,6 +547,71 @@ async fn rename_agent(
         }
     }
     StatusCode::OK.into_response()
+}
+
+/// Versions the online-update manifest offers, and which platforms each one
+/// has an asset for.
+async fn list_updates(State(state): State<SharedState>) -> Response {
+    let manifest = crate::updates::load_manifest(&state).await;
+    let versions: Vec<_> = manifest
+        .versions
+        .iter()
+        .map(|v| {
+            serde_json::json!({
+                "version": v.version,
+                "platforms": v.assets.keys().collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Json(versions).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateBody {
+    version: String,
+}
+
+/// Ask an online agent to update (or roll back) to the given manifest version.
+async fn trigger_update(
+    State(state): State<SharedState>,
+    Path(agent_id): Path<i64>,
+    Json(body): Json<UpdateBody>,
+) -> Response {
+    let (platform, tx) = {
+        let agents = state.agents.read().unwrap();
+        match agents.get(&agent_id) {
+            Some(a) if a.online => (a.platform.clone(), a.agent_tx.clone()),
+            _ => (None, None),
+        }
+    };
+    let Some(tx) = tx else {
+        return err(StatusCode::CONFLICT, "节点当前离线");
+    };
+    let Some(platform) = platform else {
+        return err(StatusCode::CONFLICT, "节点未上报平台信息，无法选择安装包");
+    };
+    let manifest = crate::updates::load_manifest(&state).await;
+    let Some(asset) = crate::updates::find_asset(&manifest, &body.version, &platform) else {
+        return err(
+            StatusCode::NOT_FOUND,
+            &format!("版本 {ver} 没有 {platform} 平台的安装包", ver = body.version),
+        );
+    };
+    let kind = crate::updates::asset_kind(&platform);
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let _ = tx.send(pharus_common::ServerToAgentMsg::Update {
+        request_id: request_id.clone(),
+        version: body.version.clone(),
+        asset_url: asset.url.clone(),
+        sha256: asset.sha256.clone(),
+        kind: kind.to_string(),
+    });
+    Json(serde_json::json!({
+        "request_id": request_id,
+        "version": body.version,
+        "platform": platform,
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]

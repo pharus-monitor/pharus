@@ -31,6 +31,10 @@ pub struct AgentState {
     pub region: Option<Region>,
     /// Diagnostics enabled for this agent after merging global and per-agent settings.
     pub features: Vec<String>,
+    /// Agent application version reported at auth (None for old agents).
+    pub app_version: Option<String>,
+    /// Agent `os-arch` platform string reported at auth.
+    pub platform: Option<String>,
     /// Channel to push server→agent messages onto the live socket.
     /// None when the agent is offline.
     pub agent_tx: Option<mpsc::UnboundedSender<pharus_common::ServerToAgentMsg>>,
@@ -54,6 +58,7 @@ impl AgentState {
             unlock: self.unlock.clone(),
             region: self.region.clone(),
             features: self.features.clone(),
+            app_version: self.app_version.clone(),
         }
     }
 }
@@ -79,6 +84,8 @@ pub struct AppState {
     /// Rolling timestamps of dispatched iperf3 runs, per agent, for an hourly
     /// per-machine budget (the backstop against IP-rotating abuse).
     pub iperf3_by_agent: Mutex<HashMap<i64, Vec<std::time::Instant>>>,
+    /// Cached online-update manifest (fetched from `update_manifest_url`).
+    pub update_cache: Mutex<Option<(crate::updates::UpdateManifest, std::time::Instant)>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,6 +128,7 @@ impl AppState {
                     unlock: Vec::new(),
                     region: None,
                     features: Vec::new(),
+                    app_version: None,
                 },
             }
         };

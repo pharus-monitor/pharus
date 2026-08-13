@@ -6,7 +6,7 @@ use pharus_common::{
     ServerToAgentMsg, SystemInfo, TaskKind, UnlockResult, PROTOCOL_VERSION,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -16,6 +16,22 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+
+/// Application version, reported to the server at auth so the admin console
+/// can offer online updates / rollbacks.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// `os-arch` platform string, e.g. "linux-x86_64" / "windows-x86_64", used by
+/// the server to pick the right update asset.
+fn platform_string() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        "x86" => "i686",
+        other => other,
+    };
+    format!("{}-{arch}", std::env::consts::OS)
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "pharus-agent", about = "Pharus monitoring agent")]
@@ -1297,6 +1313,202 @@ impl Drop for AbortTasksOnDrop {
     }
 }
 
+/* ---------- online self-update ---------- */
+
+fn update_status(msg_tx: &MsgTx, request_id: &str, phase: &str, done: bool, error: Option<String>) {
+    let _ = msg_tx.send(AgentMsg::UpdateStatus {
+        request_id: request_id.to_string(),
+        phase: phase.to_string(),
+        done,
+        error,
+    });
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+async fn download_asset(url: &str) -> Result<Vec<u8>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()?;
+    let resp = client.get(url).send().await?.error_for_status()?;
+    Ok(resp.bytes().await?.to_vec())
+}
+
+/// Unpack a `pharus-agent-linux-*.tar.gz` and return the extracted binary.
+fn extract_agent(tar_gz: &Path, work: &Path, version: &str) -> Result<PathBuf> {
+    let file = std::fs::File::open(tar_gz)?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    let dest = work.join(format!("agent-{version}"));
+    if dest.is_dir() {
+        std::fs::remove_dir_all(&dest)?;
+    }
+    std::fs::create_dir_all(&dest)?;
+    archive.unpack(&dest)?;
+    let direct = if cfg!(windows) {
+        dest.join("pharus-agent.exe")
+    } else {
+        dest.join("pharus-agent")
+    };
+    if direct.is_file() {
+        return Ok(direct);
+    }
+    // Accept an archive that nests the binary under a top-level dir.
+    fn find_bin(dir: &Path, out: &mut Option<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                find_bin(&p, out);
+            } else if out.is_none() {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == "pharus-agent" || name == "pharus-agent.exe" {
+                    *out = Some(p);
+                }
+            }
+        }
+    }
+    let mut found = None;
+    find_bin(&dest, &mut found);
+    found.ok_or_else(|| anyhow::anyhow!("archive did not contain the agent binary"))
+}
+
+/// Swap the new binary over the running one and relaunch. Returns once the
+/// replacement is in motion; the caller then exits the process.
+#[cfg(unix)]
+fn apply_replace(current: &Path, new_binary: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(new_binary, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(new_binary, current)?;
+    // systemd (Restart=always) relaunches the replaced path itself; when the
+    // agent is not managed, spawn the replacement so it survives this exit.
+    let managed = std::env::var("INVOCATION_ID").is_ok();
+    if !managed {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        std::process::Command::new(current).args(&args).spawn()?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_replace(current: &Path, new_binary: &Path) -> Result<()> {
+    let work = current
+        .parent()
+        .map(|p| p.join(".pharus-update"))
+        .unwrap_or_else(|| PathBuf::from(".pharus-update"));
+    std::fs::create_dir_all(&work)?;
+    let params = serde_json::json!({
+        "pid": std::process::id(),
+        "current": current.to_string_lossy(),
+        "new": new_binary.to_string_lossy(),
+        "args": std::env::args().skip(1).collect::<Vec<_>>(),
+    });
+    let params_path = work.join("update-params.json");
+    std::fs::write(&params_path, serde_json::to_vec_pretty(&params)?)?;
+    let ps = work.join("apply-update.ps1");
+    std::fs::write(
+        &ps,
+        r#"$ErrorActionPreference = 'Stop'
+$p = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot 'update-params.json') | ConvertFrom-Json
+while (Get-Process -Id $p.pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }
+Move-Item -Force $p.new $p.current
+Start-Process -FilePath $p.current -ArgumentList @($p.args)
+Remove-Item -Force (Join-Path $PSScriptRoot 'update-params.json') -ErrorAction SilentlyContinue
+Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
+"#,
+    )?;
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&ps)
+        .spawn()?;
+    Ok(())
+}
+
+/// Download, verify and apply an update, then restart the process.
+async fn apply_update(
+    msg_tx: MsgTx,
+    request_id: String,
+    version: String,
+    asset_url: String,
+    sha256: String,
+    kind: String,
+) {
+    let current = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            update_status(&msg_tx, &request_id, "applying", false, Some(e.to_string()));
+            return;
+        }
+    };
+    let work = current
+        .parent()
+        .map(|p| p.join(".pharus-update"))
+        .unwrap_or_else(|| PathBuf::from(".pharus-update"));
+    if let Err(e) = std::fs::create_dir_all(&work) {
+        update_status(&msg_tx, &request_id, "applying", false, Some(e.to_string()));
+        return;
+    }
+
+    let ext = if kind == "exe" { ".exe" } else { ".tar.gz" };
+    let download = work.join(format!("agent-{version}{ext}"));
+
+    update_status(&msg_tx, &request_id, "downloading", false, None);
+    let bytes = match download_asset(&asset_url).await {
+        Ok(b) => b,
+        Err(e) => {
+            update_status(&msg_tx, &request_id, "downloading", false, Some(e.to_string()));
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&download, &bytes) {
+        update_status(&msg_tx, &request_id, "downloading", false, Some(e.to_string()));
+        return;
+    }
+
+    update_status(&msg_tx, &request_id, "verifying", false, None);
+    if sha256_hex(&bytes) != sha256 {
+        update_status(
+            &msg_tx,
+            &request_id,
+            "verifying",
+            false,
+            Some("sha256 mismatch, refusing to apply".into()),
+        );
+        return;
+    }
+
+    let new_binary = if kind == "exe" {
+        download
+    } else {
+        match extract_agent(&download, &work, &version) {
+            Ok(p) => p,
+            Err(e) => {
+                update_status(&msg_tx, &request_id, "applying", false, Some(e.to_string()));
+                return;
+            }
+        }
+    };
+
+    update_status(&msg_tx, &request_id, "applying", false, None);
+    if let Err(e) = apply_replace(&current, &new_binary) {
+        update_status(&msg_tx, &request_id, "applying", false, Some(e.to_string()));
+        return;
+    }
+    update_status(&msg_tx, &request_id, "restarting", true, None);
+    // Give the writer a moment to flush the status before the process exits.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    std::process::exit(0);
+}
+
 async fn run_session(cfg: &Config) -> Result<()> {
     info!(server = %cfg.server, "connecting");
     let (ws, _) = connect_async(&cfg.server).await.context("ws connect failed")?;
@@ -1306,6 +1518,8 @@ async fn run_session(cfg: &Config) -> Result<()> {
         token: cfg.token.clone(),
         version: PROTOCOL_VERSION,
         name: sysinfo::System::host_name(),
+        app_version: Some(APP_VERSION.to_string()),
+        platform: Some(platform_string()),
     })?;
     write.send(Message::Text(auth)).await?;
 
@@ -1362,6 +1576,23 @@ async fn run_session(cfg: &Config) -> Result<()> {
                             );
                             *shared.ping_tasks.lock().unwrap() = ping_tasks;
                             *shared.custom_tasks.lock().unwrap() = custom_tasks;
+                        }
+                        Ok(ServerToAgentMsg::Update {
+                            request_id,
+                            version,
+                            asset_url,
+                            sha256,
+                            kind,
+                        }) => {
+                            info!(version, "online update requested");
+                            tokio::spawn(apply_update(
+                                msg_tx.clone(),
+                                request_id,
+                                version,
+                                asset_url,
+                                sha256,
+                                kind,
+                            ));
                         }
                         // Script runs return one buffered result; the network
                         // diagnostics stream so the browser sees them live.

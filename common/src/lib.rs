@@ -201,6 +201,13 @@ pub enum AgentMsg {
         /// per-agent token.
         #[serde(default)]
         name: Option<String>,
+        /// Agent application version (e.g. "0.6.1"); absent on old agents.
+        #[serde(default)]
+        app_version: Option<String>,
+        /// `os-arch` (e.g. "linux-x86_64", "windows-x86_64"), used to pick the
+        /// update asset. Absent on old agents.
+        #[serde(default)]
+        platform: Option<String>,
     },
     SysInfo { info: SystemInfo },
     Metrics { data: Metrics },
@@ -248,6 +255,17 @@ pub enum AgentMsg {
     },
     /// Agent-side region detection reported once per connection.
     Region { code: String },
+    /// Progress of a server-triggered online update.
+    UpdateStatus {
+        request_id: String,
+        /// "downloading" | "verifying" | "applying" | "restarting"
+        phase: String,
+        /// True once the agent is about to restart.
+        #[serde(default)]
+        done: bool,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +294,17 @@ pub enum ServerToAgentMsg {
         ping_tasks: Vec<PingTaskSpec>,
         custom_tasks: Vec<CustomTaskSpec>,
     },
+    /// Ask the agent to download, verify and swap in a new binary, then
+    /// restart itself. `kind` is "exe" (Windows raw binary) or "tar_gz"
+    /// (Linux archive containing `pharus-agent`).
+    Update {
+        request_id: String,
+        version: String,
+        asset_url: String,
+        /// Hex sha256 of the asset the agent must verify before applying.
+        sha256: String,
+        kind: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,6 +327,9 @@ pub struct AgentSnapshot {
     /// Diagnostics enabled for this agent after merging global and per-agent settings.
     #[serde(default)]
     pub features: Vec<String>,
+    /// Agent application version reported at auth (None for old agents).
+    #[serde(default)]
+    pub app_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

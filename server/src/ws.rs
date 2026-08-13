@@ -26,12 +26,14 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
         }
     };
 
-    let (token, auth_name) = match serde_json::from_str::<AgentMsg>(&auth_msg) {
+    let (token, auth_name, app_version, platform) = match serde_json::from_str::<AgentMsg>(&auth_msg) {
         Ok(AgentMsg::Auth {
             token,
             version,
             name,
-        }) if version == PROTOCOL_VERSION => (token, name),
+            app_version,
+            platform,
+        }) if version == PROTOCOL_VERSION => (token, name, app_version, platform),
         Ok(AgentMsg::Auth { .. }) => {
             let _ = write
                 .send(Message::Text(
@@ -144,6 +146,8 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
         entry.agent_tx = Some(agent_tx);
         entry.region = region.clone();
         entry.features = features.clone();
+        entry.app_version = app_version;
+        entry.platform = platform;
         if entry.unlock.is_empty() {
             entry.unlock = unlock;
         }
@@ -339,6 +343,21 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                     Ok(AgentMsg::Auth { .. }) => {
                         warn!(agent_id, "unexpected re-auth, dropping");
                         break;
+                    }
+                    Ok(AgentMsg::UpdateStatus {
+                        request_id,
+                        phase,
+                        done,
+                        error,
+                    }) => {
+                        info!(
+                            agent_id,
+                            request_id,
+                            phase,
+                            done,
+                            error = error.as_deref().unwrap_or(""),
+                            "agent update status"
+                        );
                     }
                     Err(e) => warn!(agent_id, error = %e, "bad agent message"),
                 }

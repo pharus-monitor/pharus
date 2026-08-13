@@ -216,7 +216,8 @@
       [t('host.memory'), info.mem_desc || (entry.data ? P.fmtBytes(entry.data.mem_total) : '—')],
       [t('host.system'), info.os],
       [t('host.kernel'), info.kernel],
-      [t('host.arch'), info.arch]
+      [t('host.arch'), info.arch],
+      [t('host.version'), entry.app_version]
     ];
     if (info.virtualization) items.push([t('host.virt'), info.virtualization]);
     items.forEach(function (item) {
@@ -1270,7 +1271,8 @@
       pings: Array.isArray(a.pings) ? a.pings : [],
       unlock: Array.isArray(a.unlock) ? a.unlock : [],
       region: a.region || null,
-      features: Array.isArray(a.features) ? a.features.slice() : null
+      features: Array.isArray(a.features) ? a.features.slice() : null,
+      app_version: a.app_version || null
     };
   }
 
