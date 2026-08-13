@@ -81,6 +81,47 @@
           "sha256": "c0e6b6825784b3f5c7562d0c989b8187d3695460d0c1ec9d24f881d850bf7b28"
         }
       }
+    },
+    {
+      "version": "0.6.3",
+      "notes": {
+        "zh-CN": "1. 修复自动检查：不再把低版本误报为「新版本」（仅当清单最高版本高于当前才提示）\n2. 版本选择器按新到旧排序，默认选最新版本\n3. 更新弹窗放大（modal-wide），更新说明区更高、可完整查看\n4. 版本号升至 0.6.3",
+        "en": "1. Fix auto-check: no longer shows a lower version as \"new\" (hints only when the manifest's highest version is above the current)\n2. Version picker lists newest first and defaults to it\n3. Larger update modal (modal-wide) with a taller, fully visible release-notes area\n4. Version bump to 0.6.3",
+        "ja": "1. 自動チェックの修正：低いバージョンを「新バージョン」と誤表示しない（マニフェストの最高バージョンが現在より高い場合のみ提示）\n2. バージョン選択は新しい順、デフォルトは最新\n3. 更新モーダル拡大（modal-wide）、リリースノート表示域も拡大\n4. バージョン 0.6.3",
+        "ru": "1. Исправление авто-проверки: низкая версия больше не показывается как «новая» (подсказка только если максимальная версия манифеста выше текущей)\n2. Выбор версии — от новой к старой, по умолчанию последняя\n3. Увеличенное модальное окно обновления (modal-wide) и более высокая область примечаний\n4. Версия 0.6.3"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-linux-x86_64.tar.gz",
+          "sha256": "158e85f262fc72e23ac50d66136b612c24663c49332e4b096c85cb44cbcebb2b"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-linux-aarch64.tar.gz",
+          "sha256": "07afad621b25a41777928c7b4bf47540e339e1256832bbb6547135f65d1eb413"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-linux-i686.tar.gz",
+          "sha256": "e70493619c3c199aed60577d28abbabbcf5b16fbb84e080d2cc8d20c3697286e"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "3d5c2dd84fa53633bd9b056776bd18d9e76b4d67f65881c075bbf8c080da1a8f"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "3f7b3ed0e88720c1a0ac6369122de3372f5ab4af1d969cb974247d8f79889372"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-linux-i686.tar.gz",
+          "sha256": "8ed54c873b7793b62de96644a444370375142de4152e3b65669de9256d2fce22"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-windows-x86_64.exe",
+          "sha256": "2ed6445c678c5fac60cbeb80dde27574457d0136a66c7dbff0d4fdbaf6fe5526"
+        }
+      }
     }
   ]
 }
