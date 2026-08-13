@@ -672,7 +672,7 @@ select:focus { outline: none; border-color: var(--beacon-500); }
   font: 11px/1.55 inherit;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 9rem;
+  max-height: 16rem;
   overflow-y: auto;
 }
 .field-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }

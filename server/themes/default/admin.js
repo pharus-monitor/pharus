@@ -1398,6 +1398,17 @@
     var updateLang = 'zh-CN';
     var updateVersions = [];
 
+    function versionGt(a, b) {
+      var pa = String(a).split('.').map(Number);
+      var pb = String(b).split('.').map(Number);
+      for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+        var x = pa[i] || 0;
+        var y = pb[i] || 0;
+        if (x !== y) return x > y;
+      }
+      return false;
+    }
+
     function renderUpdateNotes() {
       var notesEl = document.getElementById('update-notes');
       var select = document.getElementById('update-version');
@@ -1421,7 +1432,10 @@
       var filtered = filterUpdateVersions(versions, target.kind, target.platform);
       document.getElementById('update-title').textContent = t('update.selectVersion') + ' · ' + target.label;
       select.innerHTML = '';
-      filtered.forEach(function (v) { select.appendChild(new Option(v.version, v.version)); });
+      filtered
+        .slice()
+        .sort(function (a, b) { return versionGt(a.version, b.version) ? -1 : 1; })
+        .forEach(function (v) { select.appendChild(new Option(v.version, v.version)); });
       err.hidden = filtered.length > 0;
       if (!filtered.length) err.textContent = t('update.noVersions');
       document.getElementById('update-confirm').disabled = filtered.length === 0;
@@ -1497,9 +1511,12 @@
         panelBox.appendChild(panelStatus);
         options.content.appendChild(panelBox);
 
-        // auto-check: hint when a newer server version is available
-        var latest = filterUpdateVersions(versions, 'server', serverPlatform)[0];
-        if (latest && latest.version !== serverVersion) {
+        // auto-check: hint only when a genuinely newer server version exists
+        var latest = null;
+        filterUpdateVersions(versions, 'server', serverPlatform).forEach(function (v) {
+          if (!latest || versionGt(v.version, latest.version)) latest = v;
+        });
+        if (latest && versionGt(latest.version, serverVersion)) {
           panelStatus.textContent = t('update.newVersion') + ' ' + latest.version;
           panelStatus.className = 'inline-status ok';
         }

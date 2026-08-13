@@ -40,6 +40,47 @@
           "sha256": "f2e5db47e0e154a3cd676770894b376739ceaf7cae80071add9ed4ca179217d7"
         }
       }
+    },
+    {
+      "version": "0.6.2",
+      "notes": {
+        "zh-CN": "1. 服务器（面板）在线更新：pharus 服务器自身可在线升级——下载、校验、解包发布包，替换二进制 + themes 并重启（Linux 可用；Windows 提示无服务器安装包）\n2. 在线更新控制台：管理后台「在线更新」页显示面板版本 + 「检查更新」按钮与自动检查提示；每台主机有更新按钮，点击弹出版本选择窗口\n3. 选择版本显示更新说明：选中版本后展示该版本的发布说明，按站点默认语言显示（中文 / English / 日本語 / Русский，带回退）\n4. 可配置清单镜像：更新清单地址成为站点设置项（默认 GitHub raw 源）",
+        "en": "1. Server (panel) online updates: the Pharus server can update itself online — download, verify and unpack the release bundle, swap binary + themes and restart (Linux; Windows reports no server asset)\n2. Online-update console: the admin page shows the panel version with a \"Check for updates\" button and auto-check hint, plus per-host update buttons that open a version-selection modal\n3. Release notes in the picker: selecting a version shows its notes in the site's default language (English / 中文 / 日本語 / Русский, with fallbacks)\n4. Configurable manifest mirror: the update manifest URL is now a site setting (defaults to the GitHub raw source)",
+        "ja": "1. サーバー（パネル）オンライン更新：pharus サーバー自身をオンラインで更新（ダウンロード・検証・解凍、バイナリ＋themes を置換して再起動。Linux 対応、Windows はサーバー向けアセットなし）\n2. オンライン更新コンソール：管理画面でパネルバージョン＋「更新を確認」ボタンと自動チェック、ホストごとの更新ボタンでバージョン選択モーダル\n3. バージョン選択時のリリースノート：サイトの既定言語で表示（日本語 / English / 中文 / Русский、フォールバック付き）\n4. マニフェストミラー設定：更新マニフェスト URL がサイト設定に",
+        "ru": "1. Онлайн-обновление сервера (панели): pharus может обновлять себя сам — скачивание, проверка, распаковка, замена бинарника + themes и перезапуск (Linux; на Windows нет серверного ассета)\n2. Консоль обновлений: страница показывает версию панели, кнопку «Проверить обновления», авто-проверку и кнопки обновления хостов с модальным выбором версии\n3. Примечания к релизу при выборе версии: показываются на языке сайта (Русский / English / 中文 / 日本語, с фолбэком)\n4. Настройка зеркала манифеста: URL манифеста — настройка сайта"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-linux-x86_64.tar.gz",
+          "sha256": "388f77d607983e2fbc8baecd653a46766f8038bf98fa42f634e18156f363a163"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-linux-aarch64.tar.gz",
+          "sha256": "5e6f98098b1fafb6f76bc98c8bd97f516c1e5c49eeec4aa32ba30f0d33740505"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-linux-i686.tar.gz",
+          "sha256": "b080afd01bb26ca0889604d5b951044ab4d31fd13a4f38ba5168e9516ff121bb"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "510426e773295f212b845dd1225a73c1b001377c1a91544bae2c18617b8748c8"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "52ecde213c5ab9d5ff8f89d4273d94a11ea04fc59538a3a6f19ef6575bed8242"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-linux-i686.tar.gz",
+          "sha256": "6681ec8c95fc9ca2dfacf6d638875b72a272e67018ff0b73aee4decad847bc18"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-windows-x86_64.exe",
+          "sha256": "c0e6b6825784b3f5c7562d0c989b8187d3695460d0c1ec9d24f881d850bf7b28"
+        }
+      }
     }
   ]
 }
