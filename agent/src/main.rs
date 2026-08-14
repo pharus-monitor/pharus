@@ -254,6 +254,7 @@ fn collect_process_count(sys: &mut System) -> u32 {
     sys.processes().len() as u32
 }
 
+#[cfg(not(target_os = "linux"))]
 fn collect_connections() -> u32 {
     use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
     match get_sockets_info(
@@ -263,6 +264,24 @@ fn collect_connections() -> u32 {
         Ok(list) => list.len() as u32,
         Err(_) => 0,
     }
+}
+
+/// Linux has no portable userland socket-table API, so count the sockets
+/// directly from `/proc/net` (tcp/tcp6/udp/udp6).
+#[cfg(target_os = "linux")]
+fn collect_connections() -> u32 {
+    let mut count: u32 = 0;
+    for file in [
+        "/proc/net/tcp",
+        "/proc/net/tcp6",
+        "/proc/net/udp",
+        "/proc/net/udp6",
+    ] {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            count = count.saturating_add(text.lines().skip(1).count() as u32);
+        }
+    }
+    count
 }
 
 /// NVIDIA GPU stats from `nvidia-smi` when the driver is installed; None
