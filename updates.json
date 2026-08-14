@@ -122,6 +122,47 @@
           "sha256": "2ed6445c678c5fac60cbeb80dde27574457d0136a66c7dbff0d4fdbaf6fe5526"
         }
       }
+    },
+    {
+      "version": "0.6.4",
+      "notes": {
+        "zh-CN": "1. 在线更新进度条：更新面板或 agent 时实时显示「下载中 / 校验中 / 应用中 / 正在重启」进度\n2. 修复点击更新无反应：更新请求此前因脚本错误而静默失败\n3. agent 更新完成后自动关闭弹窗，并刷新主机版本\n4. 首页与返回链接改用 /（不再出现 /index）\n5. 主机详情页板块间距统一\n6. 版本号升至 0.6.4",
+        "en": "1. Online-update progress bar: live downloading/verifying/applying/restarting progress when updating the panel or an agent\n2. Fix silent update clicks: the request previously failed quietly due to a script error\n3. The modal closes automatically after an agent update and the host version refreshes\n4. Homepage and back links use / (no more /index in the address bar)\n5. Unified host detail panel spacing\n6. Version bump to 0.6.4",
+        "ja": "1. オンライン更新の進捗バー：パネルやエージェントの更新時に「ダウンロード中 / 検証中 / 適用中 / 再起動中」をリアルタイム表示\n2. 更新クリックが効かない問題を修正（スクリプトエラーで静かに失敗していた）\n3. エージェント更新後はモーダルを自動で閉じ、ホストのバージョンを更新\n4. ホームと戻るリンクは / を使用（アドレスバーに /index が出ない）\n5. ホスト詳細ページのパネル間隔を統一\n6. バージョン 0.6.4",
+        "ru": "1. Индикатор прогресса обновления: при обновлении панели или агента в реальном времени показывается «Загрузка / Проверка / Применение / Перезапуск»\n2. Исправлено молчаливое нажатие обновления: запрос ранее тихо падал из-за ошибки скрипта\n3. После обновления агента модальное окно закрывается автоматически, версия хоста обновляется\n4. Ссылки на главную используют / (в адресной строке больше нет /index)\n5. Единый интервал между панелями на странице хоста\n6. Версия 0.6.4"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-linux-x86_64.tar.gz",
+          "sha256": "4873161b27f067a92e22fc51be94a92b0cfde40a4baa67a17bee5298d8241fe8"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-linux-aarch64.tar.gz",
+          "sha256": "d1e971e1af231245f5f495ffb666d7b974224657d82918eabe3eb47e8b60e428"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-linux-i686.tar.gz",
+          "sha256": "c99c49537ed278037ff6cababa07429ae2d0bf8707ab34bf3f07c2f838c1e20f"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "e323f163421864ebf137aeb9378c72fba66fa6b1b959dc1f77006bc1668f5625"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "4f16d76f82a9f5caf8c46a29d2a3d678a529fc2ee3a8021a72332442ccd41b3a"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-linux-i686.tar.gz",
+          "sha256": "5713fd54f1aca4ab7c58ead5096c8d822622f2177de9d9d8fd447ea5c4528401"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-windows-x86_64.exe",
+          "sha256": "cc9e08f63a4a672f2669d26bf0c40a848a9dd0df710e2ad3de7b9ad7ed73da04"
+        }
+      }
     }
   ]
 }
