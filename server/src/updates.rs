@@ -188,11 +188,32 @@ pub async fn apply_server_update(state: &SharedState, version: String) -> Result
 
     #[cfg(unix)]
     {
+        // Stage the swap *next to the destination*, never from a single fixed
+        // staging dir, because themes and binary often live on different
+        // filesystems and rename across devices fails with EXDEV.
+        let themes_root = &state.themes_root;
+        let bin_tmp = current
+            .parent()
+            .map(|p| p.join(format!(".pharus-bin-{version}")))
+            .unwrap_or_else(|| PathBuf::from(format!(".pharus-bin-{version}")));
+        let themes_tmp = themes_root
+            .parent()
+            .map(|p| p.join(format!(".pharus-themes-{version}")))
+            .unwrap_or_else(|| PathBuf::from(format!(".pharus-themes-{version}")));
+
         broadcast_server_status(state, "applying", false, None);
-        apply_server_replace(&staged_pharus, &staged_themes, &current, &state.themes_root)
-            .map_err(|e| e.to_string())?;
-        // Let the writer flush whatever it can, then the process exits and the
-        // freshly spawned replacement keeps serving.
+        apply_server_replace_cross_device(
+            &staged_pharus,
+            &staged_themes,
+            &current,
+            &bin_tmp,
+            themes_root,
+            &themes_tmp,
+        )
+        .map_err(|e| e.to_string())?;
+        // Exit and let systemd (Restart=always) pick up the swapped binary.
+        // Spawning our own replacement would fight the service manager and the
+        // child would inherit this process's read-only mount namespace anyway.
         broadcast_server_status(state, "restarting", true, None);
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         std::process::exit(0);
@@ -206,41 +227,97 @@ pub async fn apply_server_update(state: &SharedState, version: String) -> Result
 /// Swap binary + themes for the running server and relaunch it with the same
 /// args and working directory. Only reached on Unix where rename-over-running
 /// is safe.
+/// Three-way rename that survives different destination filesystems.
+/// Stages each swap through a sibling of the destination (same device) and
+/// keeps the previous version as a `.old` so the next update can recover.
 #[cfg(unix)]
-fn apply_server_replace(
-    staged_pharus: &std::path::Path,
-    staged_themes: &std::path::Path,
+fn apply_server_replace_cross_device(
+    src_pharus: &std::path::Path,
+    src_themes: &std::path::Path,
     current: &std::path::Path,
+    bin_tmp: &std::path::Path,
     themes_root: &std::path::Path,
+    themes_tmp: &std::path::Path,
 ) -> Result<(), anyhow::Error> {
     use std::os::unix::fs::PermissionsExt;
 
-    let work = current
-        .parent()
-        .map(|p| p.join(".pharus-update"))
-        .unwrap_or_else(|| PathBuf::from(".pharus-update"));
-
-    // Swap the themes directory (the running server keeps serving; the swap
-    // happens right before the exit).
-    let backup = work.join("themes-old");
-    if themes_root.exists() {
-        if backup.exists() {
-            std::fs::remove_dir_all(&backup)?;
+    // Copy a directory tree across filesystems (rename would fail with
+    // EXDEV). Used for the themes half of the swap; binary stays on a
+    // single filesystem so its swap can use plain rename.
+    fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> Result<(), anyhow::Error> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            let ft = entry.file_type()?;
+            if ft.is_dir() {
+                copy_tree(&from, &to)?;
+            } else if ft.is_symlink() {
+                let target = std::fs::read_link(&from)?;
+                std::os::unix::fs::symlink(&target, &to)?;
+            } else {
+                std::fs::copy(&from, &to)?;
+                let _ = std::fs::set_permissions(
+                    &to,
+                    entry
+                        .metadata()
+                        .ok()
+                        .map(|m| m.permissions())
+                        .unwrap_or_else(|| std::fs::Permissions::from_mode(0o644)),
+                );
+            }
         }
-        std::fs::rename(themes_root, &backup)?;
+        Ok(())
     }
-    std::fs::rename(staged_themes, themes_root)?;
 
-    // Swap the binary.
-    std::fs::set_permissions(staged_pharus, std::fs::Permissions::from_mode(0o755))?;
-    std::fs::rename(staged_pharus, current)?;
+    // Themes: copy into a sibling of themes_root, swap in place, retire
+    // the old one to .old. Read+write crosses filesystems where rename
+    // cannot.
+    if themes_tmp.exists() {
+        if themes_tmp.is_dir() {
+            std::fs::remove_dir_all(themes_tmp)?;
+        } else {
+            std::fs::remove_file(themes_tmp)?;
+        }
+    }
+    copy_tree(src_themes, themes_tmp)?;
+    if themes_root.exists() {
+        let old = themes_root.with_extension(".old");
+        if old.exists() {
+            if old.is_dir() {
+                std::fs::remove_dir_all(&old)?;
+            } else {
+                std::fs::remove_file(&old)?;
+            }
+        }
+        std::fs::rename(themes_root, &old)?;
+    }
+    std::fs::rename(themes_tmp, themes_root)?;
 
-    // Relaunch with the original args + cwd so the new server binds identically.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let cwd = std::env::current_dir()?;
-    std::process::Command::new(current)
-        .current_dir(&cwd)
-        .args(&args)
-        .spawn()?;
+    // Binary: both staged_pharus and current live on the same filesystem
+    // (the running binary's parent), so rename is fine.
+    if bin_tmp.exists() {
+        if bin_tmp.is_dir() {
+            std::fs::remove_dir_all(bin_tmp)?;
+        } else {
+            std::fs::remove_file(bin_tmp)?;
+        }
+    }
+    // Stage lives under the binary's parent directory.
+    let bin_tmp_parent = bin_tmp.parent().ok_or_else(|| {
+        anyhow::anyhow!("staging path {} has no parent", bin_tmp.display())
+    })?;
+    std::fs::create_dir_all(bin_tmp_parent)?;
+    std::fs::rename(src_pharus, bin_tmp)?;
+    if current.exists() {
+        let old = current.with_extension(".old");
+        if old.exists() {
+            std::fs::remove_file(&old)?;
+        }
+        std::fs::rename(current, &old)?;
+    }
+    std::fs::set_permissions(bin_tmp, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(bin_tmp, current)?;
     Ok(())
 }

@@ -16,7 +16,8 @@ Restart=always
 RestartSec=3
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/pharus
+# online self-update swaps the binary; open just its own directory
+ReadWritePaths=/var/lib/pharus /usr/local/bin
 PrivateTmp=true
 
 [Install]
