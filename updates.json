@@ -163,6 +163,47 @@
           "sha256": "cc9e08f63a4a672f2669d26bf0c40a848a9dd0df710e2ad3de7b9ad7ed73da04"
         }
       }
+    },
+    {
+      "version": "0.7.0",
+      "notes": {
+        "zh-CN": "1. 指标扩展：新增 CPU 温度、GPU（名称/利用率/显存，来自 nvidia-smi）、进程数、连接数，实时显示在主机页硬件信息面板\n2. 服务探活：Ping 任务新增 SSL 证书检测（剩余天数）与 HTTP 状态码，主机页直接显示证书过期时间与响应码\n3. 多用户权限：支持创建多个账号，区分管理员（admin）与只读（viewer）角色；后台新增用户管理页，可禁用/删除/改密\n4. Docker 容器监控：agent 采集容器状态/CPU/内存，主机页新增 Docker 容器面板\n5. 主题商店：后台主题页新增「主题商店」区，可从远程清单一键安装主题；支持自定义第三方源\n6. Web 终端：主机页新增「终端」按钮，通过 WebSocket 打开交互式 shell（管理员可用）",
+        "en": "1. Extended metrics: CPU temperature, GPU (name / utilization / VRAM from nvidia-smi), process count and connection count, shown live in the host hardware panel\n2. Service checks: ping tasks now support SSL certificate probes (days to expiry) and HTTP status codes, displayed directly on the host page\n3. Multi-user: create multiple accounts with admin / read-only viewer roles; a user-management page in the admin console to disable, delete or reset passwords\n4. Docker monitoring: the agent reports container state / CPU / memory; the host page gains a Docker containers panel\n5. Theme store: a store section in the themes admin page installs themes from a remote manifest in one click; third-party sources are configurable\n6. Web terminal: a Terminal button on the host page opens an interactive shell over WebSocket (admin only)",
+        "ja": "1. メトリクス拡張：CPU 温度、GPU（名前/使用率/VRAM、nvidia-smi）、プロセス数、接続数をホストのハードウェアパネルにリアルタイム表示\n2. サービス監視：ping タスクに SSL 証明書チェック（有効期限まで）と HTTP ステータスコードを追加、ホストページに表示\n3. 複数ユーザー：管理者（admin）と読み取り専用（viewer）ロールで複数アカウントを作成可能。管理画面にユーザー管理ページ（無効化/削除/パスワード変更）\n4. Docker 監視：agent がコンテナの状態/CPU/メモリを報告、ホストページに Docker コンテナパネル\n5. テーマストア：テーマ管理に「テーマストア」セクションを追加、リモートマニフェストからワンクリックでインストール。サードパーティソースも設定可能\n6. Web ターミナル：ホストページの「ターミナル」ボタンから WebSocket で対話型シェル（管理者のみ）",
+        "ru": "1. Расширенные метрики: температура CPU, GPU (имя / загрузка / видеопамять из nvidia-smi), количество процессов и соединений — в реальном времени на панели оборудования хоста\n2. Проверка сервисов: ping-задачи поддерживают SSL-сертификаты (дней до истечения) и HTTP-статусы, отображаются на странице хоста\n3. Несколько пользователей: роли admin / viewer (только чтение), страница управления пользователями в админке (отключение, удаление, смена пароля)\n4. Мониторинг Docker: agent сообщает состояние / CPU / память контейнеров, на странице хоста появляется панель Docker\n5. Магазин тем: секция в управлении темами, установка тем из удалённого манифеста в один клик; настраиваемые сторонние источники\n6. Веб-терминал: кнопка «Терминал» на странице хоста открывает интерактивный shell по WebSocket (только для администраторов)"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-linux-x86_64.tar.gz",
+          "sha256": "0ffed4fa5099ef07093b97e8f7f8206dc59e25d3aa65fc59f989cdc8f756c570"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-linux-aarch64.tar.gz",
+          "sha256": "b7da23c5b61c9c97a496943a19dce91fec397bf79988ae9effe0bef0aec9380f"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-linux-i686.tar.gz",
+          "sha256": "6ee5f3ba1ab71237fd102df6043be43a4b1a6d30e839e6cac7fdc5b8d6d57f71"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "d7900e783bbd8a6a137098a1c96ca0cebe531b9b272ef81ea3486bf15f98714b"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "20ea856e442476fc68aa2335f48abee09cf3f759ca071535e6f33a77d1684a96"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-linux-i686.tar.gz",
+          "sha256": "6a2a9c27dcb3b67d47b0816510e1d885090d5e450085b8f5aadc8c2da09f18eb"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-windows-x86_64.exe",
+          "sha256": "6264cd3510e2f0fc935c258f793c6a7113d2f9e007d08135136ad11f302b1cde"
+        }
+      }
     }
   ]
 }
