@@ -284,9 +284,18 @@ fn collect_connections() -> u32 {
     count
 }
 
+/// NVIDIA GPU stats sampled from `nvidia-smi` (best effort).
+#[derive(Clone)]
+struct GpuInfo {
+    name: String,
+    util: Option<f32>,
+    mem_used: Option<u64>,
+    mem_total: Option<u64>,
+}
+
 /// NVIDIA GPU stats from `nvidia-smi` when the driver is installed; None
 /// otherwise. Memory values come back in MiB and are scaled to bytes.
-fn collect_gpu() -> Option<(String, Option<f32>, Option<u64>, Option<u64>)> {
+fn collect_gpu() -> Option<GpuInfo> {
     let out = std::process::Command::new("nvidia-smi")
         .args([
             "--query-gpu=name,utilization.gpu,memory.used,memory.total",
@@ -304,10 +313,10 @@ fn collect_gpu() -> Option<(String, Option<f32>, Option<u64>, Option<u64>)> {
     let mib = |s: &str| s.trim().parse::<u64>().ok().map(|m| m.saturating_mul(1024 * 1024));
     let mem_used = parts.next().and_then(mib);
     let mem_total = parts.next().and_then(mib);
-    Some((name, util, mem_used, mem_total))
+    Some(GpuInfo { name, util, mem_used, mem_total })
 }
 
-fn collect_extras(sys: &mut System, components: &mut Components, gpu_cache: &mut Option<(Instant, (String, Option<f32>, Option<u64>, Option<u64>))>) -> Extras {
+fn collect_extras(sys: &mut System, components: &mut Components, gpu_cache: &mut Option<(Instant, GpuInfo)>) -> Extras {
     let temperature_c = collect_temperature(components);
     let process_count = collect_process_count(sys);
     let connection_count = collect_connections();
@@ -321,10 +330,10 @@ fn collect_extras(sys: &mut System, components: &mut Components, gpu_cache: &mut
     };
     Extras {
         temperature_c,
-        gpu_name: gpu.as_ref().map(|g| g.0.clone()),
-        gpu_util: gpu.as_ref().and_then(|g| g.1),
-        gpu_mem_used: gpu.as_ref().and_then(|g| g.2),
-        gpu_mem_total: gpu.as_ref().and_then(|g| g.3),
+        gpu_name: gpu.as_ref().map(|g| g.name.clone()),
+        gpu_util: gpu.as_ref().and_then(|g| g.util),
+        gpu_mem_used: gpu.as_ref().and_then(|g| g.mem_used),
+        gpu_mem_total: gpu.as_ref().and_then(|g| g.mem_total),
         process_count,
         connection_count,
     }
@@ -2105,7 +2114,7 @@ async fn metrics_loop(
             .with_memory(MemoryRefreshKind::everything()),
     );
     let mut components = Components::new_with_refreshed_list();
-    let mut gpu_cache: Option<(Instant, (String, Option<f32>, Option<u64>, Option<u64>))> = None;
+    let mut gpu_cache: Option<(Instant, GpuInfo)> = None;
     let mut last_extras = Instant::now() - Duration::from_secs(30);
     let mut extras = Extras::default();
     let mut disks = Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::everything());
