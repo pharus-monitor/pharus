@@ -11,6 +11,8 @@ Restart=always
 RestartSec=3
 NoNewPrivileges=true
 ProtectSystem=full
+# online self-update swaps the binary in place; open just its own directory
+ReadWritePaths=/usr/local/bin
 PrivateTmp=true
 
 [Install]
