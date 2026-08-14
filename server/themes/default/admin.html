@@ -49,7 +49,8 @@
     <section class="admin-login" id="login-view" hidden>
       <div class="admin-login-card">
         <h2 data-i18n="admin.login">管理员登录</h2>
-        <p class="admin-login-hint" data-i18n="admin.loginHint">输入管理员账号进入管理中心</p>
+        <p class="admin-login-hint" id="login-hint" data-i18n="admin.loginHint">输入管理员账号进入管理中心</p>
+        <p class="admin-login-hint" id="login-viewer-hint" hidden data-i18n="admin.viewer">当前为只读账户，无法进入管理中心</p>
         <label class="field">
           <span data-i18n="admin.username">用户名</span>
           <input type="text" id="login-username" autocomplete="username" />
@@ -79,6 +80,7 @@
         <button class="admin-tab" type="button" data-admin-view="streamingDetect" data-i18n="admin.streaming">流媒体检测</button>
         <button class="admin-tab" type="button" data-admin-view="iperf3Log" data-i18n="admin.iperf3Log">iPerf3 记录</button>
         <button class="admin-tab" type="button" data-admin-view="themes" data-i18n="admin.themes">主题</button>
+        <button class="admin-tab" type="button" data-admin-view="users" data-i18n="admin.users">用户管理</button>
         <button class="admin-tab" type="button" data-admin-view="settings" data-i18n="admin.settings">站点设置</button>
         <button class="admin-tab" type="button" data-admin-view="updates" data-i18n="admin.updates">在线更新</button>
       </div>
@@ -157,6 +159,8 @@
       var loginPassword = document.getElementById('login-password');
       var loginErr = document.getElementById('login-err');
       var loginSubmit = document.getElementById('login-submit');
+      var loginHint = document.getElementById('login-hint');
+      var viewerHint = document.getElementById('login-viewer-hint');
       var logoutBtn = document.getElementById('logout-btn');
       var adminController = null;
       var agentsMap = new Map();
@@ -186,7 +190,10 @@
 
       function checkSession() {
         return fetch('/api/admin/check', { method: 'POST' })
-          .then(function (r) { return r.status; }).catch(function () { return 0; });
+          .then(function (r) {
+            return r.json().then(function (body) { return { status: r.status, role: body.role, username: body.username }; })
+              .catch(function () { return { status: r.status, role: null }; });
+          }).catch(function () { return { status: 0, role: null }; });
       }
 
       function doLogin(username, password) {
@@ -232,6 +239,9 @@
         loginUsername.value = '';
         loginPassword.value = '';
         loginErr.hidden = true;
+        viewerHint.hidden = true;
+        loginHint.hidden = false;
+        loginSubmit.hidden = false;
         loginView.hidden = false;
       }
 
@@ -269,9 +279,18 @@
             disabledView.hidden = false;
             return;
           }
-          checkSession().then(function (st) {
-            if (st === 200) enterAdmin();
-            else {
+          checkSession().then(function (res) {
+            if (res.status === 200 && res.role === 'admin') {
+              enterAdmin();
+            } else if (res.status === 200) {
+              // A viewer account is logged in but cannot manage.
+              loginView.hidden = false;
+              viewerHint.hidden = false;
+              loginUsername.value = res.username || '';
+              loginPassword.value = '';
+              loginSubmit.hidden = true;
+              loginHint.hidden = true;
+            } else {
               loginView.hidden = false;
               loginUsername.focus();
             }
@@ -287,7 +306,15 @@
         doLogin(u, p).then(function (res) {
           loginSubmit.disabled = false;
           if (res.status === 200) {
-            enterAdmin();
+            checkSession().then(function (s) {
+              if (s.status === 200 && s.role === 'admin') {
+                enterAdmin();
+              } else {
+                viewerHint.hidden = false;
+                loginHint.hidden = true;
+                loginSubmit.hidden = true;
+              }
+            });
           } else {
             loginErr.textContent = P.t('admin.unauthorized');
             loginErr.hidden = false;

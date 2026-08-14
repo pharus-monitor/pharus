@@ -140,6 +140,7 @@
             <button class="btn" id="diag-ping" type="button" data-i18n="diag.ping">Ping</button>
             <button class="btn" id="diag-traceroute" type="button" data-i18n="diag.traceroute">路由追踪</button>
             <button class="btn" id="diag-mtr" type="button" data-i18n="diag.mtr">MTR</button>
+            <button class="btn" id="term-btn" type="button" hidden data-i18n="host.terminal">终端</button>
           </div>
         </div>
         <div id="diag-iperf-group" hidden>
@@ -191,6 +192,17 @@
         </div>
         <p class="panel-message" id="streaming-message" role="status"></p>
         <div class="service-results" id="streaming-results"></div>
+      </section>
+
+      <section class="feature-panel feature-wide" id="docker-panel" hidden>
+        <div class="panel-head panel-head-inline">
+          <div>
+            <h2 data-i18n="docker.title">Docker 容器</h2>
+            <p data-i18n="docker.subtitle">容器运行状态与资源占用</p>
+          </div>
+        </div>
+        <p class="panel-message" id="docker-message" role="status"></p>
+        <div class="docker-table-wrap" id="docker-wrap"></div>
       </section>
 
     </div>
@@ -474,6 +486,20 @@
         <button class="btn ghost" id="rename-cancel" data-i18n="admin.cancel">取消</button>
         <button class="btn primary" id="rename-save" data-i18n="admin.save">保存</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="term-modal" hidden>
+    <div class="modal modal-wide term-modal">
+      <div class="modal-head">
+        <h3 data-i18n="host.terminal">终端</h3>
+        <button class="modal-x" id="term-x" type="button" aria-label="关闭">×</button>
+      </div>
+      <pre class="term-out" id="term-out"></pre>
+      <div class="term-input-row">
+        <input id="term-input" class="term-input" autocomplete="off" spellcheck="false" placeholder="$" data-i18n-placeholder="host.terminalPlaceholder" />
+      </div>
+      <p class="modal-err" id="term-err" hidden></p>
     </div>
   </div>
 

@@ -624,7 +624,9 @@
     localStorage.removeItem('pharus.admin');
     sessionStorage.removeItem('pharus.admin');
     fetch('/api/admin/check', { method: 'POST' }).then(function (r) {
-      if (r.ok) {
+      return r.json().then(function (b) { return b.role || null; }).catch(function () { return null; });
+    }).then(function (role) {
+      if (role === 'admin') {
         document.body.classList.add('is-admin');
       }
     }).catch(function () {});

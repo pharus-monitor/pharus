@@ -35,6 +35,8 @@ pub struct AgentState {
     pub app_version: Option<String>,
     /// Agent `os-arch` platform string reported at auth.
     pub platform: Option<String>,
+    /// Docker containers reported by the agent (empty when none / unavailable).
+    pub containers: Vec<pharus_common::ContainerInfo>,
     /// Channel to push server→agent messages onto the live socket.
     /// None when the agent is offline.
     pub agent_tx: Option<mpsc::UnboundedSender<pharus_common::ServerToAgentMsg>>,
@@ -59,6 +61,7 @@ impl AgentState {
             region: self.region.clone(),
             features: self.features.clone(),
             app_version: self.app_version.clone(),
+            containers: self.containers.clone(),
         }
     }
 }
@@ -86,6 +89,11 @@ pub struct AppState {
     pub iperf3_by_agent: Mutex<HashMap<i64, Vec<std::time::Instant>>>,
     /// Cached online-update manifest (fetched from `update_manifest_url`).
     pub update_cache: Mutex<Option<(crate::updates::UpdateManifest, std::time::Instant)>>,
+    /// Cached theme-store manifest (fetched from `theme_store_url`).
+    pub theme_store_cache: Mutex<Option<(crate::themes::StoreManifest, std::time::Instant)>>,
+    /// Browser terminal sessions: session_id -> outbound channel to the browser
+    /// WebSocket. Agent terminal output is routed through this map.
+    pub term_sessions: Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -129,6 +137,7 @@ impl AppState {
                     region: None,
                     features: Vec::new(),
                     app_version: None,
+                    containers: Vec::new(),
                 },
             }
         };

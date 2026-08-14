@@ -487,6 +487,11 @@ tr.drop-target td { border-top-color: transparent; }
 .channel-badge { margin-left: 0.45rem; padding: 0.1rem 0.4rem; border-radius: 999px; background: rgba(251, 191, 36, 0.12); color: var(--beacon-300); font-size: 9px; font-weight: 600; vertical-align: middle; white-space: nowrap; }
 .channel-badge.danger { background: rgba(248, 113, 113, 0.14); color: #f87171; }
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.875rem; margin-top: 1rem; }
+.store-title { margin: 1.75rem 0 0; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.term-out { height: 320px; overflow-y: auto; background: #0b1020; color: #d7e0ee; font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.55; padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); white-space: pre-wrap; word-break: break-all; margin: 0 0 0.6rem; }
+.term-input-row { display: flex; }
+.term-input { flex: 1; font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 0.5rem 0.65rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-primary); }
+.term-input:focus { outline: none; border-color: var(--beacon-500); }
 .theme-card { display: flex; flex-direction: column; gap: 0.45rem; padding: 1rem 1.1rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-surface); transition: border-color 0.3s; }
 .theme-card:hover { border-color: var(--border-strong); }
 .theme-card.active { border-color: rgba(251, 191, 36, 0.45); box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.2); }

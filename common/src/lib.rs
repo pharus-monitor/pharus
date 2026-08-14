@@ -50,6 +50,26 @@ pub struct Metrics {
     /// Disk read rate in bytes/s since the last sample (0 = old agent).
     #[serde(default)]
     pub disk_read_bps: u64,
+    /// CPU temperature in °C (best effort; None when the agent can't read it).
+    #[serde(default)]
+    pub temperature_c: Option<f32>,
+    /// Primary GPU name (e.g. "NVIDIA GeForce RTX 4090"); None without a GPU.
+    #[serde(default)]
+    pub gpu_name: Option<String>,
+    /// GPU utilization percent 0..=100 (best effort).
+    #[serde(default)]
+    pub gpu_util: Option<f32>,
+    /// GPU memory used / total in bytes (best effort).
+    #[serde(default)]
+    pub gpu_mem_used: Option<u64>,
+    #[serde(default)]
+    pub gpu_mem_total: Option<u64>,
+    /// Number of running processes.
+    #[serde(default)]
+    pub process_count: u32,
+    /// Number of open TCP/UDP sockets.
+    #[serde(default)]
+    pub connection_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +135,15 @@ pub struct PingResult {
     /// Packet loss ratio 0.0..=1.0
     #[serde(default)]
     pub loss: f64,
+    /// HTTP status code captured by an http probe (service-health view).
+    #[serde(default)]
+    pub status: Option<u16>,
+    /// Days until the served TLS certificate expires (ssl probe).
+    #[serde(default)]
+    pub cert_days: Option<f64>,
+    /// Subject common name of the served certificate (ssl probe).
+    #[serde(default)]
+    pub cert_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +152,7 @@ pub enum PingKind {
     Icmp,
     Tcp,
     Http,
+    Ssl,
 }
 
 /// A ping/tcping probe the agent should run on its own schedule.
@@ -188,6 +218,27 @@ pub struct UnlockResult {
     /// "yes" | "no" | "fail"
     pub status: String,
     pub detail: Option<String>,
+}
+
+/// A Docker container running on the agent host (best effort; absent on hosts
+/// without a Docker daemon).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerInfo {
+    pub name: String,
+    pub image: String,
+    /// "running" | "exited" | "created" | ...
+    pub state: String,
+    /// CPU utilization percent, rate-sampled between polls (None before the
+    /// second sample).
+    #[serde(default)]
+    pub cpu_pct: Option<f64>,
+    /// Memory used / limit in bytes.
+    #[serde(default)]
+    pub mem_used: Option<u64>,
+    #[serde(default)]
+    pub mem_limit: Option<u64>,
+    #[serde(default)]
+    pub restart_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +317,19 @@ pub enum AgentMsg {
         #[serde(default)]
         error: Option<String>,
     },
+    /// Docker containers on the agent host (empty when Docker is unavailable).
+    Containers { containers: Vec<ContainerInfo> },
+    /// Interactive terminal: the agent writes pty output for a session.
+    TermOutput {
+        session_id: String,
+        data: String,
+    },
+    /// The pty session ended.
+    TermExit {
+        session_id: String,
+        #[serde(default)]
+        exit_code: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,6 +369,27 @@ pub enum ServerToAgentMsg {
         sha256: String,
         kind: String,
     },
+    /// Open an interactive shell (pty) on the agent for the browser terminal.
+    TermOpen {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+        /// Optional explicit shell (e.g. "bash"); None = platform default.
+        #[serde(default)]
+        shell: Option<String>,
+    },
+    TermInput {
+        session_id: String,
+        data: String,
+    },
+    TermResize {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    TermClose {
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,6 +415,9 @@ pub struct AgentSnapshot {
     /// Agent application version reported at auth (None for old agents).
     #[serde(default)]
     pub app_version: Option<String>,
+    /// Docker containers reported by the agent (empty when none / unavailable).
+    #[serde(default)]
+    pub containers: Vec<ContainerInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,4 +460,5 @@ pub enum BrowserMsg {
         #[serde(default)]
         error: Option<String>,
     },
+    Containers { agent_id: i64, containers: Vec<ContainerInfo> },
 }

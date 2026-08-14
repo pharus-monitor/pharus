@@ -512,7 +512,7 @@
       openModal(task.id == null ? t('pingTask.create') : t('pingTask.edit'), function (root) {
         refs.label = inputField('pingTask.label', task.label, { required: true });
         refs.agent = agentMultiField(task.agent_ids);
-        refs.kind = selectField('pingTask.kind', ['icmp', 'tcp', 'http'].map(function (kind) {
+        refs.kind = selectField('pingTask.kind', ['icmp', 'tcp', 'http', 'ssl'].map(function (kind) {
           return { value: kind, label: kind.toUpperCase() };
         }), task.kind || 'icmp');
         refs.target = inputField('pingTask.target', task.target, { required: true });
@@ -814,6 +814,69 @@
       }).catch(showError);
     }
 
+    /* ---------- Users ---------- */
+    function openUserForm(user) {
+      user = user || {};
+      var refs = {};
+      openModal(user.id == null ? t('user.create') : t('user.edit'), function (root) {
+        refs.username = inputField('user.username', user.username || '', { required: true, disabled: user.id != null });
+        refs.password = inputField(user.id == null ? 'user.password' : 'user.newPassword', '', { type: 'password' });
+        refs.role = selectField('user.role', [
+          { value: 'admin', label: 'admin' },
+          { value: 'viewer', label: 'viewer' }
+        ], user.role || 'viewer');
+        append(root, refs.username.el, refs.password.el, refs.role.el);
+      }, function () {
+        if (user.id == null) {
+          return saveEntity('/api/admin/users', null, {
+            username: refs.username.input.value.trim(),
+            password: refs.password.input.value,
+            role: refs.role.input.value
+          });
+        }
+        var body = { role: refs.role.input.value };
+        if (refs.password.input.value) body.password = refs.password.input.value;
+        return saveEntity('/api/admin/users', user.id, body);
+      });
+    }
+
+    function renderUsers() {
+      setLoading(); clearError();
+      options.request('/api/admin/users').then(function (list) {
+        if (!active || currentView !== 'users') return;
+        list = Array.isArray(list) ? list : [];
+        options.content.innerHTML = '';
+        options.content.appendChild(toolbar(t('admin.users'), t('user.create'), function () { openUserForm(null); }));
+        var rows = list.map(function (u) {
+          var actions = actionsCell();
+          var edit = actionButton(t('admin.edit'), function () { openUserForm(u); });
+          var toggle = actionButton(u.enabled ? t('user.disable') : t('user.enable'), function () {
+            toggle.disabled = true;
+            options.request('/api/admin/users/' + u.id, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: !u.enabled })
+            }).then(function () { renderUsers(); }).catch(function (e) { showError(e); toggle.disabled = false; });
+          });
+          var del = actionButton(t('admin.delete'), function () {
+            if (!window.confirm(t('admin.deleteConfirm'))) return;
+            del.disabled = true;
+            options.request('/api/admin/users/' + u.id, { method: 'DELETE' })
+              .then(function () { renderUsers(); })
+              .catch(function (e) { showError(e); del.disabled = false; });
+          });
+          actions.appendChild(edit);
+          actions.appendChild(toggle);
+          actions.appendChild(del);
+          var statusClass = u.enabled ? 'ok' : 'crit';
+          var status = node('span', 'inline-status ' + statusClass, u.enabled ? t('common.enabled') : t('common.disabled'));
+          return [u.username, u.role, status, actions];
+        });
+        options.content.appendChild(makeTable([
+          t('user.username'), t('user.role'), t('user.enabled'), t('common.actions')
+        ], rows));
+      }).catch(showError);
+    }
+
     /* ---------- Feature defaults and overrides ---------- */
     function overrideValue(overrides, feature) {
       if (!Object.prototype.hasOwnProperty.call(overrides || {}, feature)) return '';
@@ -1085,9 +1148,11 @@
           { value: 'ru', label: 'Русский' }
         ], meta.default_language || 'en');
         var proxies = inputField('settings.trustedProxies', settings.trusted_proxies || '', { type: 'text', placeholder: '173.245.48.0/20, 103.21.244.0/22, …' });
+        var themeStore = inputField('settings.themeStoreUrl', settings.theme_store_url || '', { type: 'text', placeholder: 'https://…/theme-store.json' });
         box.appendChild(name.el);
         box.appendChild(lang.el);
         box.appendChild(proxies.el);
+        box.appendChild(themeStore.el);
         var status = node('span', 'inline-status');
         var save = actionButton(t('admin.save'), function () {
           function put(key, value) {
@@ -1100,7 +1165,8 @@
           var puts = [
             put('site_name', name.input.value.trim()),
             put('default_language', lang.input.value),
-            put('trusted_proxies', proxies.input.value.trim())
+            put('trusted_proxies', proxies.input.value.trim()),
+            put('theme_store_url', themeStore.input.value.trim())
           ];
           save.disabled = true;
           status.textContent = t('common.saving');
@@ -1277,9 +1343,13 @@
 
     function renderThemes() {
       setLoading(); clearError();
-      options.request('/api/admin/themes').then(function (themes) {
+      Promise.all([
+        options.request('/api/admin/themes'),
+        options.request('/api/admin/theme-store').catch(function () { return null; })
+      ]).then(function (values) {
         if (!active || currentView !== 'themes') return;
-        themes = Array.isArray(themes) ? themes : [];
+        var themes = Array.isArray(values[0]) ? values[0] : [];
+        var store = values[1];
         options.content.innerHTML = '';
         var bar = toolbar(t('admin.themes'), t('theme.upload'), function () {
           var input = options.content.querySelector('#theme-file');
@@ -1302,14 +1372,55 @@
             .then(function () { fileInput.value = ''; });
         });
         options.content.appendChild(fileInput);
-        if (!themes.length) {
+        if (themes.length) {
+          var grid = node('div', 'theme-grid');
+          themes.forEach(function (theme) { grid.appendChild(themeCard(theme)); });
+          options.content.appendChild(grid);
+        } else {
           options.content.appendChild(node('p', 'admin-empty', t('common.noData')));
-          return;
         }
-        var grid = node('div', 'theme-grid');
-        themes.forEach(function (theme) { grid.appendChild(themeCard(theme)); });
-        options.content.appendChild(grid);
+        if (store && Array.isArray(store.themes) && store.themes.length) {
+          options.content.appendChild(node('h3', 'admin-toolbar h3 store-title', t('theme.store')));
+          var storeGrid = node('div', 'theme-grid');
+          store.themes.forEach(function (item) {
+            storeGrid.appendChild(storeThemeCard(item, (store.installed || []).indexOf(item.id) >= 0));
+          });
+          options.content.appendChild(storeGrid);
+        }
       }).catch(showError);
+    }
+
+    function storeThemeCard(item, installed) {
+      var card = node('div', 'theme-card');
+      var head = node('div', 'theme-card-head');
+      var name = node('div', 'theme-card-name');
+      name.appendChild(node('span', '', item.name || item.id));
+      if (installed) name.appendChild(node('span', 'theme-badge active', t('theme.installed')));
+      head.appendChild(name);
+      card.appendChild(head);
+      var meta = node('div', 'theme-card-meta');
+      meta.appendChild(node('span', 'num', 'v' + (item.version || '0.0.0')));
+      if (item.author) meta.appendChild(node('span', '', item.author));
+      card.appendChild(meta);
+      if (item.description) card.appendChild(node('p', 'theme-card-desc', item.description));
+      var actions = node('div', 'theme-card-actions');
+      if (installed) {
+        actions.appendChild(actionButton(t('theme.activate'), function () {
+          options.request('/api/admin/themes/' + encodeURIComponent(item.id) + '/activate', { method: 'POST' })
+            .then(renderThemes).catch(showError);
+        }));
+      } else {
+        actions.appendChild(actionButton(t('theme.install'), function () {
+          actions.querySelector('button').disabled = true;
+          options.request('/api/admin/theme-store/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: item.url })
+          }).then(renderThemes).catch(showError);
+        }));
+      }
+      card.appendChild(actions);
+      return card;
     }
 
     /* ---------- iPerf3 log ---------- */
@@ -1612,6 +1723,7 @@
       else if (currentView === 'streamingDetect') renderStreamingDetect();
       else if (currentView === 'iperf3Log') renderIperf3Log();
       else if (currentView === 'themes') renderThemes();
+      else if (currentView === 'users') renderUsers();
       else if (currentView === 'settings') renderSettings();
       else if (currentView === 'updates') renderUpdates();
     }

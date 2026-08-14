@@ -124,6 +124,13 @@ mod tests {
             net_tx_total: tx_total,
             disk_write_bps: 0,
             disk_read_bps: 0,
+            temperature_c: None,
+            gpu_name: None,
+            gpu_util: None,
+            gpu_mem_used: None,
+            gpu_mem_total: None,
+            process_count: 0,
+            connection_count: 0,
         }
     }
 

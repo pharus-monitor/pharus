@@ -3,6 +3,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use pharus_common::{AgentMsg, AgentSnapshot, BrowserMsg, ServerToAgentMsg, PROTOCOL_VERSION};
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 const AGENT_OFFLINE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -249,6 +250,15 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                         }
                         state.broadcast(BrowserMsg::Unlock { agent_id, results });
                     }
+                    Ok(AgentMsg::Containers { containers }) => {
+                        {
+                            let mut agents = state.agents.write().unwrap();
+                            if let Some(a) = agents.get_mut(&agent_id) {
+                                a.containers = containers.clone();
+                            }
+                        }
+                        state.broadcast(BrowserMsg::Containers { agent_id, containers });
+                    }
                     Ok(AgentMsg::TaskResult { task_id, exit_code, output, scheduled_id }) => {
                         match scheduled_id {
                             // periodic run of a stored task: persist it
@@ -366,6 +376,20 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             error,
                         });
                     }
+                    Ok(AgentMsg::TermOutput { session_id, data }) => {
+                        if let Some(tx) = state.term_sessions.lock().unwrap().get(&session_id) {
+                            let _ = tx.send(data);
+                        }
+                    }
+                    Ok(AgentMsg::TermExit { session_id, exit_code }) => {
+                        let mut sessions = state.term_sessions.lock().unwrap();
+                        if let Some(tx) = sessions.get(&session_id) {
+                            let _ = tx.send(
+                                format!("\r\n[进程已退出{}{}]\r\n", if exit_code.is_some() { "，代码 " } else { "" }, exit_code.map(|c| c.to_string()).unwrap_or_default())
+                            );
+                            sessions.remove(&session_id);
+                        }
+                    }
                     Err(e) => warn!(agent_id, error = %e, "bad agent message"),
                 }
             }
@@ -445,4 +469,98 @@ pub async fn handle_browser_socket(state: SharedState, socket: WebSocket) {
             }
         }
     }
+}
+
+/// Browser terminal: one WebSocket per session. The first frame must be
+/// `{"type":"open","agent_id":N}`, then `input`/`resize` frames stream down.
+/// Agent pty output is routed back through `state.term_sessions`.
+pub async fn handle_term_socket(state: SharedState, socket: WebSocket) {
+    let (mut write, mut read) = socket.split();
+
+    let open = match read.next().await {
+        Some(Ok(Message::Text(t))) => serde_json::from_str::<serde_json::Value>(&t).ok(),
+        _ => None,
+    };
+    let Some(open) = open else {
+        let _ = write.send(Message::Close(None)).await;
+        return;
+    };
+    if open.get("type").and_then(|v| v.as_str()) != Some("open") {
+        let _ = write.send(Message::Close(None)).await;
+        return;
+    }
+    let agent_id = open.get("agent_id").and_then(|v| v.as_i64()).unwrap_or(0);
+    if agent_id <= 0 {
+        let _ = write.send(Message::Close(None)).await;
+        return;
+    }
+    let cols = open.get("cols").and_then(|v| v.as_u64()).map(|v| v as u16).unwrap_or(80);
+    let rows = open.get("rows").and_then(|v| v.as_u64()).map(|v| v as u16).unwrap_or(24);
+    let shell = open.get("shell").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let agent_tx = {
+        let agents = state.agents.read().unwrap();
+        agents.get(&agent_id).and_then(|a| a.agent_tx.clone())
+    };
+    let Some(agent_tx) = agent_tx else {
+        let _ = write.send(Message::Text("主机离线".into())).await;
+        let _ = write.send(Message::Close(None)).await;
+        return;
+    };
+
+    let session_id = uuid::Uuid::new_v4().simple().to_string();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    state.term_sessions.lock().unwrap().insert(session_id.clone(), out_tx);
+
+    let fwd = tokio::spawn(async move {
+        while let Some(data) = out_rx.recv().await {
+            if write.send(Message::Text(data)).await.is_err() {
+                break;
+            }
+        }
+        let _ = write.send(Message::Close(None)).await;
+    });
+
+    let _ = agent_tx.send(ServerToAgentMsg::TermOpen {
+        session_id: session_id.clone(),
+        cols,
+        rows,
+        shell,
+    });
+
+    loop {
+        match read.next().await {
+            Some(Ok(Message::Text(t))) => {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) else { continue };
+                match v.get("type").and_then(|x| x.as_str()) {
+                    Some("input") => {
+                        if let Some(d) = v.get("data").and_then(|x| x.as_str()) {
+                            let _ = agent_tx.send(ServerToAgentMsg::TermInput {
+                                session_id: session_id.clone(),
+                                data: d.to_string(),
+                            });
+                        }
+                    }
+                    Some("resize") => {
+                        let c = v.get("cols").and_then(|x| x.as_u64()).map(|x| x as u16).unwrap_or(80);
+                        let r = v.get("rows").and_then(|x| x.as_u64()).map(|x| x as u16).unwrap_or(24);
+                        let _ = agent_tx.send(ServerToAgentMsg::TermResize {
+                            session_id: session_id.clone(),
+                            cols: c,
+                            rows: r,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            Some(Ok(Message::Close(_))) | None => break,
+            _ => break,
+        }
+    }
+
+    let _ = agent_tx.send(ServerToAgentMsg::TermClose {
+        session_id: session_id.clone(),
+    });
+    state.term_sessions.lock().unwrap().remove(&session_id);
+    fwd.abort();
 }

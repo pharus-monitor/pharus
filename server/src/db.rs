@@ -201,7 +201,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -324,6 +324,11 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if version < 14 {
         add_column(conn, "metrics_history", "disk_read_bps", "INTEGER NOT NULL DEFAULT 0")?;
+    }
+    if version < 15 {
+        // Multi-user: role (admin/viewer) and account disable switch.
+        add_column(conn, "users", "role", "TEXT NOT NULL DEFAULT 'admin'")?;
+        add_column(conn, "users", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
@@ -448,25 +453,69 @@ pub fn clear_setting(conn: &Connection, key: &str) -> Result<usize> {
     Ok(conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?)
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserRow {
+    pub id: i64,
+    pub username: String,
+    pub role: String,
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
 pub fn count_users(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?)
 }
 
-pub fn find_user(conn: &Connection, username: &str) -> Result<Option<(i64, String)>> {
+pub fn find_user(conn: &Connection, username: &str) -> Result<Option<(i64, String, String, bool)>> {
     let row = conn
         .query_row(
-            "SELECT id, password_hash FROM users WHERE username = ?1",
+            "SELECT id, password_hash, role, enabled FROM users WHERE username = ?1",
             params![username],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)? != 0)),
         )
         .optional()?;
     Ok(row)
 }
 
-pub fn insert_user(conn: &Connection, username: &str, password_hash: &str) -> Result<usize> {
+pub fn find_user_by_id(conn: &Connection, id: i64) -> Result<Option<UserRow>> {
+    let row = conn
+        .query_row(
+            "SELECT id, username, role, enabled, created_at FROM users WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(UserRow {
+                    id: r.get(0)?,
+                    username: r.get(1)?,
+                    role: r.get(2)?,
+                    enabled: r.get::<_, i64>(3)? != 0,
+                    created_at: r.get(4)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub fn list_users(conn: &Connection) -> Result<Vec<UserRow>> {
+    let mut stmt = conn.prepare("SELECT id, username, role, enabled, created_at FROM users ORDER BY id")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(UserRow {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                role: r.get(2)?,
+                enabled: r.get::<_, i64>(3)? != 0,
+                created_at: r.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn insert_user(conn: &Connection, username: &str, password_hash: &str, role: &str) -> Result<usize> {
     Ok(conn.execute(
-        "INSERT OR IGNORE INTO users (username, password_hash, created_at) VALUES (?1, ?2, ?3)",
-        params![username, password_hash, now_ts()],
+        "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![username, password_hash, role, now_ts()],
     )?)
 }
 
@@ -479,6 +528,21 @@ pub fn update_user_password(
         "UPDATE users SET password_hash = ?2 WHERE username = ?1",
         params![username, password_hash],
     )?)
+}
+
+pub fn update_user_role(conn: &Connection, id: i64, role: &str) -> Result<usize> {
+    Ok(conn.execute("UPDATE users SET role = ?2 WHERE id = ?1", params![id, role])?)
+}
+
+pub fn set_user_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE users SET enabled = ?2 WHERE id = ?1",
+        params![id, if enabled { 1 } else { 0 }],
+    )?)
+}
+
+pub fn delete_user(conn: &Connection, id: i64) -> Result<usize> {
+    Ok(conn.execute("DELETE FROM users WHERE id = ?1", params![id])?)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -680,6 +744,7 @@ pub fn ping_kind_from_str(s: &str) -> Option<PingKind> {
         "icmp" => Some(PingKind::Icmp),
         "tcp" => Some(PingKind::Tcp),
         "http" => Some(PingKind::Http),
+        "ssl" => Some(PingKind::Ssl),
         _ => None,
     }
 }
@@ -1693,6 +1758,9 @@ mod tests {
             rtt_min: Some(rtt),
             rtt_max: Some(rtt),
             loss: 0.0,
+            status: None,
+            cert_days: None,
+            cert_name: None,
         }
     }
 
@@ -1740,6 +1808,9 @@ mod tests {
             rtt_min: None,
             rtt_max: None,
             loss: 1.0,
+            status: None,
+            cert_days: None,
+            cert_name: None,
         };
 
         insert_ping_history(&conn, 1, &down).unwrap();

@@ -2,15 +2,19 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt};
 use pharus_common::{
-    AgentMsg, CustomTaskSpec, Metrics, MtrHop, PingKind, PingResult, PingTarget, PingTaskSpec,
-    ServerToAgentMsg, SystemInfo, TaskKind, UnlockResult, PROTOCOL_VERSION,
+    AgentMsg, ContainerInfo, CustomTaskSpec, Metrics, MtrHop, PingKind, PingResult, PingTarget,
+    PingTaskSpec, ServerToAgentMsg, SystemInfo, TaskKind, UnlockResult, PROTOCOL_VERSION,
 };
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind, System};
+use sysinfo::{
+    Components, CpuRefreshKind, Disks, MemoryRefreshKind, Networks, ProcessesToUpdate, RefreshKind, System,
+};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, MissedTickBehavior};
@@ -220,8 +224,95 @@ async fn collect_mem_desc() -> Option<String> {
     }
 }
 
+/// Secondary live metrics that are either expensive to collect (GPU via
+/// nvidia-smi) or refreshed less often than the main sample. Refreshed on a
+/// gate inside the metrics loop so a 3s tick doesn't hammer WMI / nvidia-smi.
+#[derive(Default, Clone)]
+struct Extras {
+    temperature_c: Option<f32>,
+    gpu_name: Option<String>,
+    gpu_util: Option<f32>,
+    gpu_mem_used: Option<u64>,
+    gpu_mem_total: Option<u64>,
+    process_count: u32,
+    connection_count: u32,
+}
+
+/// Hottest component temperature reported by sysinfo (CPU package/core on
+/// most platforms; best effort).
+fn collect_temperature(components: &mut Components) -> Option<f32> {
+    components.refresh(true);
+    let t = components
+        .iter()
+        .filter_map(|c| c.temperature())
+        .fold(0f32, f32::max);
+    (t > 0.0).then_some(t)
+}
+
+fn collect_process_count(sys: &mut System) -> u32 {
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys.processes().len() as u32
+}
+
+fn collect_connections() -> u32 {
+    use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
+    match get_sockets_info(
+        AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6,
+        ProtocolFlags::TCP | ProtocolFlags::UDP,
+    ) {
+        Ok(list) => list.len() as u32,
+        Err(_) => 0,
+    }
+}
+
+/// NVIDIA GPU stats from `nvidia-smi` when the driver is installed; None
+/// otherwise. Memory values come back in MiB and are scaled to bytes.
+fn collect_gpu() -> Option<(String, Option<f32>, Option<u64>, Option<u64>)> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.lines().next()?.split(',');
+    let name = parts.next()?.trim().to_string();
+    let util = parts.next().and_then(|s| s.trim().parse::<f32>().ok());
+    let mib = |s: &str| s.trim().parse::<u64>().ok().map(|m| m.saturating_mul(1024 * 1024));
+    let mem_used = parts.next().and_then(mib);
+    let mem_total = parts.next().and_then(mib);
+    Some((name, util, mem_used, mem_total))
+}
+
+fn collect_extras(sys: &mut System, components: &mut Components, gpu_cache: &mut Option<(Instant, (String, Option<f32>, Option<u64>, Option<u64>))>) -> Extras {
+    let temperature_c = collect_temperature(components);
+    let process_count = collect_process_count(sys);
+    let connection_count = collect_connections();
+    let gpu = match gpu_cache {
+        Some((t, g)) if t.elapsed() < Duration::from_secs(30) => Some(g.clone()),
+        _ => {
+            let g = collect_gpu();
+            *gpu_cache = g.clone().map(|v| (Instant::now(), v));
+            g
+        }
+    };
+    Extras {
+        temperature_c,
+        gpu_name: gpu.as_ref().map(|g| g.0.clone()),
+        gpu_util: gpu.as_ref().and_then(|g| g.1),
+        gpu_mem_used: gpu.as_ref().and_then(|g| g.2),
+        gpu_mem_total: gpu.as_ref().and_then(|g| g.3),
+        process_count,
+        connection_count,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_total: u64, tx_total: u64, disk_write_diff: u64, disk_read_diff: u64, interval_s: u64) -> Metrics {
+fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_total: u64, tx_total: u64, disk_write_diff: u64, disk_read_diff: u64, interval_s: u64, extras: &Extras) -> Metrics {
     let cpu_usage = sys.global_cpu_usage();
     let mut disk_used = 0u64;
     let mut disk_total = 0u64;
@@ -246,16 +337,113 @@ fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_t
         net_tx_total: tx_total,
         disk_write_bps: disk_write_diff / interval_s.max(1),
         disk_read_bps: disk_read_diff / interval_s.max(1),
+        temperature_c: extras.temperature_c,
+        gpu_name: extras.gpu_name.clone(),
+        gpu_util: extras.gpu_util,
+        gpu_mem_used: extras.gpu_mem_used,
+        gpu_mem_total: extras.gpu_mem_total,
+        process_count: extras.process_count,
+        connection_count: extras.connection_count,
     }
 }
 
 type MsgTx = mpsc::UnboundedSender<AgentMsg>;
+
+struct TermSession {
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    writer: Box<dyn std::io::Write + Send>,
+}
 
 #[derive(Default)]
 struct Shared {
     tcping: Mutex<Vec<PingTarget>>,
     ping_tasks: Mutex<Vec<PingTaskSpec>>,
     custom_tasks: Mutex<Vec<CustomTaskSpec>>,
+    /// Open interactive terminal sessions keyed by session_id.
+    terms: Mutex<HashMap<String, TermSession>>,
+}
+
+/* ---------- interactive terminal (web console) ---------- */
+
+async fn open_term(
+    msg_tx: MsgTx,
+    shared: Arc<Shared>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    shell: Option<String>,
+) -> Result<(), String> {
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    use std::io::Read as _;
+
+    let pty = native_pty_system();
+    let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+    let pair = pty.openpty(size).map_err(|e| e.to_string())?;
+    let shell_cmd = shell.unwrap_or_else(|| {
+        if cfg!(windows) {
+            "powershell.exe".into()
+        } else {
+            std::env::var("SHELL").unwrap_or_else(|_| "sh".into())
+        }
+    });
+    let mut child = pair
+        .slave
+        .spawn_command(CommandBuilder::new(shell_cmd))
+        .map_err(|e| e.to_string())?;
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    {
+        let mut terms = shared.terms.lock().unwrap();
+        if terms.contains_key(&session_id) {
+            return Err("session already open".into());
+        }
+        terms.insert(
+            session_id.clone(),
+            TermSession { master: pair.master, writer },
+        );
+    }
+
+    let sid = session_id.clone();
+    let reader_tx = msg_tx.clone();
+    let reader_shared = shared.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if reader_tx
+                        .send(AgentMsg::TermOutput { session_id: sid.clone(), data })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        reader_shared.terms.lock().unwrap().remove(&sid);
+        let exit_code = child.try_wait().ok().flatten().map(|s| s.exit_code() as i32);
+        let _ = reader_tx.send(AgentMsg::TermExit { session_id: sid, exit_code });
+    });
+    Ok(())
+}
+
+fn term_input(shared: &Arc<Shared>, session_id: &str, data: &str) {
+    use std::io::Write as _;
+    let mut terms = shared.terms.lock().unwrap();
+    if let Some(sess) = terms.get_mut(session_id) {
+        let _ = sess.writer.write_all(data.as_bytes());
+        let _ = sess.writer.flush();
+    }
+}
+
+fn term_resize(shared: &Arc<Shared>, session_id: &str, cols: u16, rows: u16) {
+    let terms = shared.terms.lock().unwrap();
+    if let Some(sess) = terms.get(session_id) {
+        let _ = sess.master.resize(portable_pty::PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+    }
 }
 
 /* ---------- probes ---------- */
@@ -274,20 +462,73 @@ async fn tcp_rtt(host: &str, port: u16) -> Option<f64> {
     }
 }
 
-async fn http_rtt(client: &reqwest::Client, target: &str) -> Option<f64> {
+/// HTTP service probe: `(response_time_ms, status_code)`. Any HTTP response
+/// counts as reachable (even 4xx/5xx) so the UI can surface real status codes.
+async fn http_probe(client: &reqwest::Client, target: &str) -> Option<(f64, u16)> {
     let url = match has_http_scheme(target) {
         true => target.to_string(),
         false => format!("https://{target}"),
     };
     let start = Instant::now();
     match client.get(url).send().await {
-        Ok(r) if r.status().as_u16() < 500 => Some(start.elapsed().as_secs_f64() * 1000.0),
-        _ => None,
+        Ok(r) => Some((start.elapsed().as_secs_f64() * 1000.0, r.status().as_u16())),
+        Err(_) => None,
     }
 }
 
 fn has_http_scheme(target: &str) -> bool {
     target.starts_with("http://") || target.starts_with("https://")
+}
+
+/// TLS certificate probe: connect, run a ClientHello handshake, then read the
+/// served leaf certificate and report `(connect_ms, days_to_expiry, cn)`.
+fn ssl_probe_sync(host: &str, port: u16) -> Option<(f64, f64, String)> {
+    use std::io::Write as _;
+    use x509_parser::parse_x509_certificate;
+
+    let start = Instant::now();
+    let sock = std::net::TcpStream::connect(format!("{host}:{port}")).ok()?;
+    let rtt = start.elapsed().as_secs_f64() * 1000.0;
+    sock.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    sock.set_write_timeout(Some(Duration::from_secs(5))).ok()?;
+
+    let server_name = match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ServerName::IpAddress(ip.into()),
+        Err(_) => ServerName::try_from(host.to_string()).ok()?,
+    };
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let conn = ClientConnection::new(std::sync::Arc::new(config), server_name).ok()?;
+    let mut tls = StreamOwned::new(conn, sock);
+    tls.flush().ok()?; // drive the handshake
+    let leaf = tls.conn.peer_certificates()?.first()?.as_ref();
+    let (_, cert) = parse_x509_certificate(leaf).ok()?;
+    let not_after = cert.validity().not_after.timestamp();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = (not_after - now) as f64 / 86_400.0;
+    let cn = cert
+        .subject()
+        .iter_attributes()
+        .find(|atv| atv.attr_type().to_id_string() == "2.5.4.3")
+        .and_then(|atv| atv.attr_value().as_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| host.to_string());
+    Some((rtt, days, cn))
+}
+
+async fn ssl_probe(host: &str, port: u16) -> Option<(f64, f64, String)> {
+    let host = host.to_string();
+    let task = tokio::task::spawn_blocking(move || ssl_probe_sync(&host, port));
+    match tokio::time::timeout(Duration::from_secs(8), task).await {
+        Ok(Ok(v)) => v,
+        _ => None,
+    }
 }
 
 /// `(avg, min, max, loss)` — loss is the fraction of probes that got no reply.
@@ -355,8 +596,8 @@ async fn icmp_probe(target: &str, count: u32) -> Rtt {
 
 async fn probe_ping_task(spec: &PingTaskSpec, http: &reqwest::Client) -> PingResult {
     let count = spec.count.clamp(1, 20);
-    let (avg, min, max, loss) = match spec.kind {
-        PingKind::Icmp => icmp_probe(&spec.target, count).await,
+    let (rtt, status, cert_days, cert_name) = match spec.kind {
+        PingKind::Icmp => (icmp_probe(&spec.target, count).await, None, None, None),
         PingKind::Tcp => {
             let port = spec.port.unwrap_or(80);
             let mut samples = Vec::new();
@@ -365,25 +606,51 @@ async fn probe_ping_task(spec: &PingTaskSpec, http: &reqwest::Client) -> PingRes
                     samples.push(v);
                 }
             }
-            summarize(&samples, count)
+            (summarize(&samples, count), None, None, None)
         }
         PingKind::Http => {
             let mut samples = Vec::new();
+            let mut status = None;
             for _ in 0..count {
-                if let Some(v) = http_rtt(http, &spec.target).await {
+                if let Some((v, s)) = http_probe(http, &spec.target).await {
                     samples.push(v);
+                    if status.is_none() {
+                        status = Some(s);
+                    }
                 }
             }
-            summarize(&samples, count)
+            (summarize(&samples, count), status, None, None)
+        }
+        PingKind::Ssl => {
+            let port = spec.port.unwrap_or(443);
+            let mut samples = Vec::new();
+            let mut cert = None;
+            for _ in 0..count {
+                if let Some((v, days, cn)) = ssl_probe(&spec.target, port).await {
+                    samples.push(v);
+                    if cert.is_none() {
+                        cert = Some((days, cn));
+                    }
+                }
+            }
+            (
+                summarize(&samples, count),
+                None,
+                cert.as_ref().map(|c| c.0),
+                cert.as_ref().map(|c| c.1.clone()),
+            )
         }
     };
     PingResult {
         label: spec.label.clone(),
-        rtt_ms: avg,
+        rtt_ms: rtt.0,
         task_id: Some(spec.id),
-        rtt_min: min,
-        rtt_max: max,
-        loss,
+        rtt_min: rtt.1,
+        rtt_max: rtt.2,
+        loss: rtt.3,
+        status,
+        cert_days,
+        cert_name,
     }
 }
 
@@ -419,6 +686,9 @@ async fn ping_scheduler(msg_tx: MsgTx, shared: Arc<Shared>, http: reqwest::Clien
                     rtt_min: rtt,
                     rtt_max: rtt,
                     loss: if rtt.is_some() { 0.0 } else { 1.0 },
+                    status: None,
+                    cert_days: None,
+                    cert_name: None,
                 });
             }
             changed = true;
@@ -1509,6 +1779,103 @@ async fn apply_update(
     std::process::exit(0);
 }
 
+/* ---------- docker containers ---------- */
+
+async fn collect_containers(
+    docker: &bollard::Docker,
+    prev: &mut HashMap<String, (Instant, u64, u64, u64)>,
+) -> Option<Vec<ContainerInfo>> {
+    use bollard::container::{ListContainersOptions, StatsOptions};
+
+    let list = match docker
+        .list_containers(Some(ListContainersOptions::<String> {
+            all: false,
+            ..Default::default()
+        }))
+        .await
+    {
+        Ok(l) => l,
+        Err(_) => return None,
+    };
+    let now = Instant::now();
+    let live_ids: std::collections::HashSet<String> = list.iter().filter_map(|c| c.id.clone()).collect();
+    let mut out = Vec::new();
+    for c in list {
+        let id = c.id.clone().unwrap_or_default();
+        let name = c
+            .names
+            .as_ref()
+            .and_then(|n| n.first())
+            .cloned()
+            .unwrap_or_else(|| id.clone())
+            .trim_start_matches('/')
+            .to_string();
+        let image = c.image.clone().unwrap_or_else(|| "?".into());
+        let state = c.state.clone().unwrap_or_else(|| "?".into());
+        let (cpu_pct, mem_used, mem_limit) = if state == "running" {
+            let mut stream = docker.stats(&id, Some(StatsOptions { one_shot: true, ..Default::default() }));
+            match futures_util::StreamExt::next(&mut stream).await {
+                Some(Ok(stats)) => {
+                    let total = stats.cpu_stats.cpu_usage.total_usage;
+                    let system = stats.cpu_stats.system_cpu_usage.unwrap_or(0);
+                    let online = stats.cpu_stats.online_cpus.unwrap_or(0).max(1);
+                    let cpu_pct = match prev.get(&id) {
+                        Some((t, pt, ps, _)) => {
+                            let dt = now.duration_since(*t).as_micros() as u64;
+                            let d_total = total.saturating_sub(*pt);
+                            let d_sys = system.saturating_sub(*ps);
+                            if dt > 0 && d_sys > 0 {
+                                Some((d_total as f64 / d_sys as f64) * online as f64 * 100.0)
+                            } else {
+                                None
+                            }
+                        }
+                        None => None,
+                    };
+                    prev.insert(id.clone(), (now, total, system, online));
+                    (cpu_pct, stats.memory_stats.usage, stats.memory_stats.limit)
+                }
+                _ => (None, None, None),
+            }
+        } else {
+            (None, None, None)
+        };
+        out.push(ContainerInfo {
+            name,
+            image,
+            state,
+            cpu_pct,
+            mem_used,
+            mem_limit,
+            restart_count: None,
+        });
+    }
+    prev.retain(|k, _| live_ids.contains(k));
+    Some(out)
+}
+
+/// Report Docker containers every ~15s. Exits silently when the host has no
+/// Docker daemon reachable (nothing to monitor).
+async fn docker_loop(msg_tx: MsgTx) {
+    sleep(Duration::from_secs(5)).await;
+    let docker = match bollard::Docker::connect_with_local_defaults() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let mut prev: HashMap<String, (Instant, u64, u64, u64)> = HashMap::new();
+    let mut tick = interval(Duration::from_secs(15));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        let Some(containers) = collect_containers(&docker, &mut prev).await else {
+            continue;
+        };
+        if msg_tx.send(AgentMsg::Containers { containers }).is_err() {
+            return;
+        }
+    }
+}
+
 async fn run_session(cfg: &Config) -> Result<()> {
     info!(server = %cfg.server, "connecting");
     let (ws, _) = connect_async(&cfg.server).await.context("ws connect failed")?;
@@ -1594,6 +1961,30 @@ async fn run_session(cfg: &Config) -> Result<()> {
                                 kind,
                             ));
                         }
+                        Ok(ServerToAgentMsg::TermOpen { session_id, cols, rows, shell }) => {
+                            let msg_tx = msg_tx.clone();
+                            let shared = shared.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    open_term(msg_tx.clone(), shared, session_id.clone(), cols, rows, shell).await
+                                {
+                                    let _ = msg_tx.send(AgentMsg::TermOutput {
+                                        session_id: session_id.clone(),
+                                        data: format!("\r\n[终端启动失败: {e}]\r\n"),
+                                    });
+                                    let _ = msg_tx.send(AgentMsg::TermExit { session_id, exit_code: Some(1) });
+                                }
+                            });
+                        }
+                        Ok(ServerToAgentMsg::TermInput { session_id, data }) => {
+                            term_input(&shared, &session_id, &data);
+                        }
+                        Ok(ServerToAgentMsg::TermResize { session_id, cols, rows }) => {
+                            term_resize(&shared, &session_id, cols, rows);
+                        }
+                        Ok(ServerToAgentMsg::TermClose { session_id }) => {
+                            shared.terms.lock().unwrap().remove(&session_id);
+                        }
                         // Script runs return one buffered result; the network
                         // diagnostics stream so the browser sees them live.
                         Ok(ServerToAgentMsg::RunTask {
@@ -1660,6 +2051,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
     let pings = tokio::spawn(ping_scheduler(msg_tx.clone(), shared.clone(), http.clone()));
     let tasks = tokio::spawn(custom_task_scheduler(msg_tx.clone(), shared.clone()));
     let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
+    let docker = tokio::spawn(docker_loop(msg_tx.clone()));
     // Whichever task ends first aborts the session, and the rest would otherwise
     // keep running against a socket nobody reads while the next attempt opens a
     // second one.
@@ -1669,6 +2061,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
         pings.abort_handle(),
         tasks.abort_handle(),
         unlock.abort_handle(),
+        docker.abort_handle(),
     ]);
 
     let metrics = metrics_loop(msg_tx.clone(), cfg);
@@ -1692,6 +2085,10 @@ async fn metrics_loop(
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
+    let mut components = Components::new_with_refreshed_list();
+    let mut gpu_cache: Option<(Instant, (String, Option<f32>, Option<u64>, Option<u64>))> = None;
+    let mut last_extras = Instant::now() - Duration::from_secs(30);
+    let mut extras = Extras::default();
     let mut disks = Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::everything());
     let mut networks = Networks::new_with_refreshed_list();
 
@@ -1739,7 +2136,11 @@ async fn metrics_loop(
         let read_diff = read.saturating_sub(prev_read);
         prev_read = read;
 
-        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, write_diff, read_diff, elapsed);
+        if last_extras.elapsed() >= Duration::from_secs(10) {
+            extras = collect_extras(&mut sys, &mut components, &mut gpu_cache);
+            last_extras = Instant::now();
+        }
+        let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, write_diff, read_diff, elapsed, &extras);
         msg_tx.send(AgentMsg::Metrics { data: metrics })?;
     }
 }

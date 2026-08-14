@@ -84,6 +84,23 @@ async fn browser_ws(State(state): State<SharedState>, ws: WebSocketUpgrade) -> a
     ws.on_upgrade(move |socket| ws::handle_browser_socket(state, socket))
 }
 
+async fn term_ws(State(state): State<SharedState>, ws: WebSocketUpgrade, req: Request) -> axum::response::Response {
+    // The terminal opens a shell on a host, so it requires an admin session.
+    let authorized = crate::admin::authenticate(&state, req.headers())
+        .map(|(username, _)| {
+            let conn = state.db.lock().unwrap();
+            match crate::db::find_user(&conn, &username) {
+                Ok(Some((_, _, role, enabled))) => enabled && role == "admin",
+                _ => false,
+            }
+        })
+        .unwrap_or(false);
+    if !authorized {
+        return axum::response::IntoResponse::into_response(axum::http::StatusCode::UNAUTHORIZED);
+    }
+    ws.on_upgrade(move |socket| ws::handle_term_socket(state, socket))
+}
+
 async fn status_json(State(state): State<SharedState>) -> Json<Vec<AgentSnapshot>> {
     let ids: Vec<i64> = state.agents.read().unwrap().keys().copied().collect();
     let list = ids.iter().map(|id| state.snapshot_with_gates(*id)).collect();
@@ -184,7 +201,7 @@ async fn serve(
 
     if let Some(pw) = admin_password {
         let hash = crate::admin::hash_password(&pw)?;
-        db::insert_user(&conn, &admin_user, &hash)?;
+        db::insert_user(&conn, &admin_user, &hash, "admin")?;
     }
 
     let billing_map = db::list_billing(&conn)?;
@@ -230,6 +247,8 @@ async fn serve(
         diag_by_ip: Mutex::new(HashMap::new()),
         iperf3_by_agent: Mutex::new(HashMap::new()),
         update_cache: Mutex::new(None),
+        theme_store_cache: Mutex::new(None),
+        term_sessions: Mutex::new(HashMap::new()),
     });
 
     alerts::spawn(state.clone());
@@ -290,6 +309,7 @@ async fn serve(
     let app = Router::new()
         .route("/ws/agent", get(agent_ws))
         .route("/api/stream", get(browser_ws))
+        .route("/ws/term", get(term_ws))
         .route("/api/status", get(status_json))
         .route("/host", get(themed_page_host))
         .route("/admin", get(themed_page_admin))

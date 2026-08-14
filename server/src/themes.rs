@@ -248,6 +248,33 @@ pub fn theme_dir(themes_root: &Path, id: &str) -> Option<PathBuf> {
     }
 }
 
+/// A theme listed in the remote store manifest (theme-store.json).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoreTheme {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Direct download URL of the theme zip (validated by install_zip).
+    pub url: String,
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoreManifest {
+    #[serde(default)]
+    pub themes: Vec<StoreTheme>,
+}
+
+/// Default store source; operators can point at their own mirror via the
+/// `theme_store_url` site setting.
+pub const DEFAULT_STORE_URL: &str =
+    "https://raw.githubusercontent.com/pharus-monitor/pharus/main/theme-store.json";
+
 #[cfg(test)]
 mod tests {
     use super::*;

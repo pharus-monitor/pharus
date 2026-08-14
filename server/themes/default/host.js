@@ -47,8 +47,16 @@
   var diagError = document.getElementById('diag-error');
   var diagSessions = document.getElementById('diag-sessions');
   var diagEmpty = document.getElementById('diag-empty');
+  var termBtn = document.getElementById('term-btn');
+  var termModal = document.getElementById('term-modal');
+  var termOut = document.getElementById('term-out');
+  var termInput = document.getElementById('term-input');
+  var termErr = document.getElementById('term-err');
   var streamingMessage = document.getElementById('streaming-message');
   var streamingResults = document.getElementById('streaming-results');
+  var dockerPanel = document.getElementById('docker-panel');
+  var dockerMessage = document.getElementById('docker-message');
+  var dockerWrap = document.getElementById('docker-wrap');
   var editModeBtn = document.getElementById('edit-mode-btn');
   var tokenModal = document.getElementById('token-modal');
   var tokenInput = document.getElementById('token-input');
@@ -180,8 +188,18 @@
         ? t('ping.unreachable')
         : Number(result.rtt_ms).toFixed(1) + ' ms';
       value += ' · ' + Math.round(loss * 100) + '% ' + t('ping.lossShort');
-      P.chip(card.pings, result.label || ('#' + (result.task_id == null ? '—' : result.task_id)), value,
-        result.rtt_ms == null || loss > 0.2 ? 'crit' : loss > 0 ? 'warn' : 'ok');
+      var cls;
+      if (result.cert_days != null) {
+        value += ' · ' + t('ping.certDays').replace('{n}', Math.round(result.cert_days));
+        if (result.cert_name) value += ' · ' + result.cert_name;
+        cls = result.cert_days < 7 ? 'crit' : result.cert_days < 30 ? 'warn' : 'ok';
+      } else if (result.status != null) {
+        value += ' · HTTP ' + result.status;
+        cls = result.status < 400 ? 'ok' : 'crit';
+      } else {
+        cls = result.rtt_ms == null || loss > 0.2 ? 'crit' : loss > 0 ? 'warn' : 'ok';
+      }
+      P.chip(card.pings, result.label || ('#' + (result.task_id == null ? '—' : result.task_id)), value, cls);
     });
   }
 
@@ -203,6 +221,47 @@
     return b && (b.reset_day != null || b.quota_bytes != null || b.expires_at != null || b.price != null);
   }
 
+  function renderDocker() {
+    dockerPanel.hidden = !entry.info;
+    dockerWrap.innerHTML = '';
+    if (!entry.info) return;
+    var list = entry.containers || [];
+    if (!list.length) {
+      dockerPanel.hidden = true;
+      dockerMessage.textContent = t('docker.empty');
+      dockerMessage.hidden = true;
+      return;
+    }
+    var wrap = document.createElement('div');
+    wrap.className = 'admin-table-wrap';
+    var table = document.createElement('table');
+    table.className = 'admin-table';
+    var head = document.createElement('thead');
+    head.innerHTML = '<tr><th>' + t('docker.name') + '</th><th>' + t('docker.image') + '</th><th>' + t('docker.state') + '</th><th>' + t('docker.cpu') + '</th><th>' + t('docker.memory') + '</th></tr>';
+    table.appendChild(head);
+    var body = document.createElement('tbody');
+    list.forEach(function (c) {
+      var tr = document.createElement('tr');
+      var mem = c.mem_limit ? (P.fmtBytes(c.mem_used || 0) + ' / ' + P.fmtBytes(c.mem_limit)) : (c.mem_used ? P.fmtBytes(c.mem_used) : '—');
+      var cpu = c.cpu_pct != null ? Number(c.cpu_pct).toFixed(1) + '%' : '—';
+      [c.name, c.image, c.state].forEach(function (text) {
+        var td = document.createElement('td');
+        td.textContent = text || '—';
+        tr.appendChild(td);
+      });
+      var tdCpu = document.createElement('td');
+      tdCpu.textContent = cpu;
+      tr.appendChild(tdCpu);
+      var tdMem = document.createElement('td');
+      tdMem.textContent = mem;
+      tr.appendChild(tdMem);
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    wrap.appendChild(table);
+    dockerWrap.appendChild(wrap);
+  }
+
   function renderHardware() {
     var info = entry.info;
     var panel = document.getElementById('hw-panel');
@@ -220,6 +279,18 @@
       [t('host.version'), entry.app_version]
     ];
     if (info.virtualization) items.push([t('host.virt'), info.virtualization]);
+    var d = entry.data;
+    if (d) {
+      if (d.temperature_c != null) items.push([t('host.temperature'), d.temperature_c.toFixed(1) + ' °C']);
+      if (d.gpu_name) {
+        var gpu = d.gpu_name;
+        if (d.gpu_util != null) gpu += ' · ' + Math.round(d.gpu_util) + '%';
+        if (d.gpu_mem_total) gpu += ' · ' + P.fmtBytes(d.gpu_mem_used || 0) + ' / ' + P.fmtBytes(d.gpu_mem_total);
+        items.push([t('host.gpu'), gpu]);
+      }
+      if (d.process_count) items.push([t('host.processes'), String(d.process_count)]);
+      if (d.connection_count) items.push([t('host.connections'), String(d.connection_count)]);
+    }
     items.forEach(function (item) {
       var cell = document.createElement('div');
       cell.className = 'hw-item';
@@ -353,6 +424,7 @@
     renderRegion();
     renderPings();
     renderUnlock();
+    renderDocker();
     renderIps();
     updatePingGate();
     updateDiagGate();
@@ -1264,6 +1336,7 @@
       agent_id: a.agent_id,
       online: a.online,
       data: a.data,
+      containers: Array.isArray(a.containers) ? a.containers : [],
       name: a.name,
       info: a.info,
       billing: a.billing || null,
@@ -1323,6 +1396,10 @@
         streamingMessage.textContent = '';
         renderServiceResults(entry.unlock);
       }
+    } else if (msg.type === 'containers' && msg.agent_id === hostId) {
+      if (!entry) entry = { agent_id: hostId };
+      entry.containers = Array.isArray(msg.containers) ? msg.containers : [];
+      renderAll();
     } else if (msg.type === 'diag_result') {
       handleDiagnosticFrame(msg);
     } else if (msg.type === 'features_update' && msg.agent_id === hostId) {
@@ -1339,7 +1416,9 @@
   function checkSession() {
     // Admin session is an HttpOnly cookie; no token lives in JS.
     return fetch('/api/admin/check', { method: 'POST' })
-      .then(function (r) { return r.status; }).catch(function () { return 0; });
+      .then(function (r) {
+        return r.json().then(function (b) { return b.role || null; }).catch(function () { return null; });
+      }).catch(function () { return null; });
   }
 
   function doLogin(username, password) {
@@ -1356,6 +1435,7 @@
     adminOn = on;
     editModeBtn.classList.toggle('active', on);
     addTaskBtn.hidden = !on;
+    termBtn.hidden = !on;
     if (card) card.renameBtn.hidden = !on;
     if (card) renderBilling();
     if (card) renderIps();
@@ -1521,8 +1601,8 @@
       setAdmin(false);
       return;
     }
-    checkSession().then(function (st) {
-      if (st === 200) {
+    checkSession().then(function (role) {
+      if (role === 'admin') {
         setAdmin(true);
       } else {
         tokenErr.hidden = true;
@@ -1540,7 +1620,15 @@
     doLogin(u, p).then(function (res) {
       if (res.status === 200) {
         tokenModal.hidden = true;
-        setAdmin(true);
+        checkSession().then(function (role) {
+          if (role === 'admin') {
+            setAdmin(true);
+          } else {
+            tokenErr.textContent = t('admin.viewer');
+            tokenErr.hidden = false;
+            tokenModal.hidden = false;
+          }
+        });
       } else {
         tokenErr.textContent = t('admin.unauthorized');
         tokenErr.hidden = false;
@@ -1564,8 +1652,8 @@
   });
   addTaskBtn.addEventListener('click', function () {
     if (!adminOn) {
-      checkSession().then(function (st) {
-        if (st === 200) {
+      checkSession().then(function (role) {
+        if (role === 'admin') {
           setAdmin(true);
           openAddTask();
         } else {
@@ -1680,6 +1768,69 @@
   });
 
   /* ---------- boot ---------- */
+  /* ---------- terminal ---------- */
+  var termWs = null;
+
+  function termAppend(text) {
+    termOut.textContent += text;
+    termOut.scrollTop = termOut.scrollHeight;
+  }
+
+  function closeTerminal() {
+    if (termWs) {
+      try { termWs.send(JSON.stringify({ type: 'close' })); } catch (e) {}
+      try { termWs.close(); } catch (e) {}
+    }
+    termWs = null;
+    termModal.hidden = true;
+    termErr.hidden = true;
+  }
+
+  function openTerminal() {
+    termOut.textContent = '';
+    termInput.value = '';
+    termInput.disabled = true;
+    termErr.hidden = true;
+    termModal.hidden = false;
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = new WebSocket(proto + '//' + location.host + '/ws/term');
+    termWs = ws;
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ type: 'open', agent_id: hostId, cols: 80, rows: 24 }));
+      termInput.disabled = false;
+      termInput.focus();
+    };
+    ws.onmessage = function (ev) {
+      termAppend(String(ev.data));
+    };
+    ws.onclose = function () {
+      termAppend('\r\n[连接已关闭]\r\n');
+      termInput.disabled = true;
+      if (termWs === ws) termWs = null;
+    };
+    ws.onerror = function () {
+      termErr.textContent = t('host.terminalError');
+      termErr.hidden = false;
+    };
+  }
+
+  termBtn.addEventListener('click', function () {
+    if (!adminOn) return;
+    openTerminal();
+  });
+  termInput.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      if (!termWs || termInput.disabled) return;
+      termWs.send(JSON.stringify({ type: 'input', data: termInput.value + '\n' }));
+      termInput.value = '';
+    }
+  });
+  document.getElementById('term-x').addEventListener('click', closeTerminal);
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && !termModal.hidden) closeTerminal();
+  });
+
   P.ready().then(function () {
     P.initTheme();
     P.requestJson('/api/status').then(function (agents) {

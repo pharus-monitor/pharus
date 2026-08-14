@@ -25,7 +25,6 @@ const ALERT_METRICS: &[&str] = &["cpu", "mem", "disk", "load", "traffic", "loss"
 
 pub fn router(state: SharedState) -> Router<SharedState> {
     let protected = Router::new()
-        .route("/api/admin/check", post(check))
         .route("/api/admin/agents", get(list_agents))
         .route("/api/admin/agents/:id/billing", put(update_billing))
         .route("/api/admin/agents/:id/name", put(rename_agent))
@@ -74,21 +73,38 @@ pub fn router(state: SharedState) -> Router<SharedState> {
         )
         .route("/api/admin/iperf3-log", get(iperf3_log))
         .route("/api/admin/streaming", get(streaming_log))
-        .route("/api/admin/password", put(update_password))
+        .route(
+            "/api/admin/users",
+            get(list_users).post(create_user),
+        )
+        .route(
+            "/api/admin/users/:id",
+            put(update_user).delete(delete_user),
+        )
         .route("/api/admin/themes", get(list_themes).post(upload_theme))
         .route(
             "/api/admin/themes/:id/activate",
             post(activate_theme),
         )
         .route("/api/admin/themes/:id", delete(delete_theme))
+        .route("/api/admin/theme-store", get(theme_store))
+        .route(
+            "/api/admin/theme-store/install",
+            post(install_store_theme),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin))
         // Theme zips can legitimately exceed axum's default 2 MiB body cap;
         // the upload path caps total bytes itself and extraction is bounded.
         .route_layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 4096));
+    let session_only = Router::new()
+        .route("/api/admin/check", post(check))
+        .route("/api/admin/password", put(update_password))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_session));
     Router::new()
         .route("/api/admin/login", post(login))
         .route("/api/admin/logout", post(logout))
         .merge(protected)
+        .merge(session_only)
 }
 
 #[derive(Clone)]
@@ -143,7 +159,7 @@ fn clear_session_cookie(response: &mut Response, secure: bool) {
 
 /// Prefer the HttpOnly cookie, fall back to a Bearer token for programmatic
 /// clients (curl, scripts).
-fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> {
+pub(crate) fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(raw) = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -162,22 +178,45 @@ fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Validate the session cookie/token against the in-memory session map and
+/// return the authenticated username + token.
+pub(crate) fn authenticate(state: &SharedState, headers: &axum::http::HeaderMap) -> Option<(String, String)> {
+    let token = extract_session_token(headers)?;
+    let mut sessions = state.sessions.lock().unwrap();
+    let (username, created) = sessions.get(&token)?;
+    if created.elapsed() > SESSION_TTL {
+        sessions.remove(&token);
+        return None;
+    }
+    Some((username.clone(), token))
+}
+
+/// Any valid session (admin or viewer). Used by `check` and `update_password`.
+async fn require_session(State(state): State<SharedState>, mut req: Request, next: Next) -> Response {
+    let Some((username, token)) = authenticate(&state, req.headers()) else {
+        return err(StatusCode::UNAUTHORIZED, "invalid session");
+    };
+    req.extensions_mut()
+        .insert(AdminSession { username, token });
+    next.run(req).await
+}
+
+/// Valid session whose user is an enabled admin. The role is read from the DB
+/// on every request, so a demoted or disabled account loses access instantly.
 async fn require_admin(State(state): State<SharedState>, mut req: Request, next: Next) -> Response {
-    let token = extract_session_token(req.headers());
-    let Some(token) = token else {
-        return err(StatusCode::UNAUTHORIZED, "missing bearer token");
+    let Some((username, token)) = authenticate(&state, req.headers()) else {
+        return err(StatusCode::UNAUTHORIZED, "invalid session");
     };
-    let username = {
-        let mut sessions = state.sessions.lock().unwrap();
-        let Some((username, created)) = sessions.get(&token) else {
-            return err(StatusCode::UNAUTHORIZED, "invalid session");
-        };
-        if created.elapsed() > SESSION_TTL {
-            sessions.remove(&token);
-            return err(StatusCode::UNAUTHORIZED, "session expired");
+    let role_ok = {
+        let conn = state.db.lock().unwrap();
+        match db::find_user(&conn, &username) {
+            Ok(Some((_, _, role, enabled))) => enabled && role == "admin",
+            _ => false,
         }
-        username.clone()
     };
+    if !role_ok {
+        return err(StatusCode::FORBIDDEN, "admin required");
+    }
     req.extensions_mut()
         .insert(AdminSession { username, token });
     next.run(req).await
@@ -277,9 +316,12 @@ async fn login(State(state): State<SharedState>, req: Request) -> Response {
             Err(e) => return db_err(e),
         }
     };
-    let Some((_id, hash)) = record else {
+    let Some((_id, hash, _role, enabled)) = record else {
         return record_login_failure(&state, &ip);
     };
+    if !enabled {
+        return err(StatusCode::FORBIDDEN, "account disabled");
+    }
     if !verify_password(&body.password, &hash) {
         return record_login_failure(&state, &ip);
     }
@@ -322,7 +364,7 @@ async fn update_password(
     let hash = {
         let conn = state.db.lock().unwrap();
         match db::find_user(&conn, &username) {
-            Ok(Some((_, h))) => h,
+            Ok(Some((_, h, _, _))) => h,
             Ok(None) => return err(StatusCode::UNAUTHORIZED, "user not found"),
             Err(e) => return db_err(e),
         }
@@ -364,6 +406,7 @@ async fn read_settings(State(state): State<SharedState>) -> Response {
     Json(serde_json::json!({
         "trusted_proxies": get("trusted_proxies").unwrap_or_default(),
         "update_manifest_url": get("update_manifest_url").unwrap_or_default(),
+        "theme_store_url": get("theme_store_url").unwrap_or_default(),
     }))
     .into_response()
 }
@@ -410,6 +453,12 @@ async fn update_setting(
                 }
             }
         }
+        "theme_store_url" => {
+            let v = body.value.trim();
+            if !v.is_empty() && !(v.starts_with("http://") || v.starts_with("https://")) {
+                return bad("theme_store_url must be a valid http(s) URL");
+            }
+        }
         _ => return bad("unknown setting key"),
     }
     {
@@ -426,9 +475,175 @@ async fn update_setting(
 }
 
 /// Session probe for the frontend: reaching this handler means the bearer
-/// token is a valid admin session.
-async fn check() -> StatusCode {
-    StatusCode::OK
+/// token is a valid session. Returns the username + role so the UI can decide
+/// whether the account may edit/manage.
+async fn check(State(state): State<SharedState>, Extension(session): Extension<AdminSession>) -> Response {
+    let (role, enabled) = {
+        let conn = state.db.lock().unwrap();
+        match db::find_user(&conn, &session.username) {
+            Ok(Some((_, _, role, enabled))) => (role, enabled),
+            _ => ("viewer".into(), false),
+        }
+    };
+    Json(serde_json::json!({
+        "username": session.username,
+        "role": if enabled { role } else { "viewer".to_string() },
+    }))
+    .into_response()
+}
+
+// ---------------------------------------------------------------- users
+
+#[derive(Debug, Deserialize)]
+struct CreateUserBody {
+    username: String,
+    password: String,
+    #[serde(default)]
+    role: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateUserBody {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+fn valid_role(r: &str) -> bool {
+    r == "admin" || r == "viewer"
+}
+
+fn valid_username(u: &str) -> bool {
+    let len = u.chars().count();
+    (2..=32).contains(&len) && u.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+async fn list_users(State(state): State<SharedState>) -> Response {
+    let conn = state.db.lock().unwrap();
+    match db::list_users(&conn) {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => db_err(e),
+    }
+}
+
+async fn create_user(State(state): State<SharedState>, Json(body): Json<CreateUserBody>) -> Response {
+    let username = body.username.trim().to_string();
+    if !valid_username(&username) {
+        return bad("username must be 2-32 chars: letters, digits, _ or -");
+    }
+    if body.password.len() < 6 {
+        return bad("password must be at least 6 characters");
+    }
+    let role = if valid_role(&body.role) { body.role.clone() } else { "viewer".into() };
+    let hash = match hash_password(&body.password) {
+        Ok(h) => h,
+        Err(e) => return db_err(e),
+    };
+    let conn = state.db.lock().unwrap();
+    match db::insert_user(&conn, &username, &hash, &role) {
+        Ok(0) => err(StatusCode::CONFLICT, "username already exists"),
+        Ok(_) => StatusCode::CREATED.into_response(),
+        Err(e) => db_err(e),
+    }
+}
+
+async fn update_user(
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+    Extension(session): Extension<AdminSession>,
+    Json(body): Json<UpdateUserBody>,
+) -> Response {
+    let conn = state.db.lock().unwrap();
+    let Some(target) = db::find_user_by_id(&conn, id).ok().flatten() else {
+        return err(StatusCode::NOT_FOUND, "user not found");
+    };
+    let new_role = body.role.as_deref().unwrap_or(&target.role);
+    let new_enabled = body.enabled.unwrap_or(target.enabled);
+    if !valid_role(new_role) {
+        return bad("role must be admin or viewer");
+    }
+    if new_role != target.role || new_enabled != target.enabled {
+        // Refuse self-demotion / self-disable to prevent lockouts.
+        let self_id = db::find_user(&conn, &session.username).ok().flatten().map(|u| u.0);
+        if self_id == Some(target.id) && (new_role != "admin" || !new_enabled) {
+            return bad("cannot demote or disable your own account");
+        }
+        // Never remove the last enabled admin.
+        if target.role == "admin" && (new_role != "admin" || !new_enabled) {
+            let other_admins = db::list_users(&conn)
+                .unwrap_or_default()
+                .iter()
+                .filter(|u| u.enabled && u.role == "admin" && u.id != target.id)
+                .count();
+            if other_admins == 0 {
+                return bad("cannot demote or disable the last admin");
+            }
+        }
+        if let Err(e) = db::update_user_role(&conn, target.id, new_role) {
+            return db_err(e);
+        }
+        if let Err(e) = db::set_user_enabled(&conn, target.id, new_enabled) {
+            return db_err(e);
+        }
+        // A disabled account loses its live sessions immediately.
+        if !new_enabled {
+            state
+                .sessions
+                .lock()
+                .unwrap()
+                .retain(|_, (user, _)| user != &target.username);
+        }
+    }
+    if let Some(pw) = body.password {
+        if pw.len() < 6 {
+            return bad("password must be at least 6 characters");
+        }
+        let hash = match hash_password(&pw) {
+            Ok(h) => h,
+            Err(e) => return db_err(e),
+        };
+        if let Err(e) = db::update_user_password(&conn, &target.username, &hash) {
+            return db_err(e);
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn delete_user(
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+    Extension(session): Extension<AdminSession>,
+) -> Response {
+    let conn = state.db.lock().unwrap();
+    let Some(target) = db::find_user_by_id(&conn, id).ok().flatten() else {
+        return err(StatusCode::NOT_FOUND, "user not found");
+    };
+    let self_id = db::find_user(&conn, &session.username).ok().flatten().map(|u| u.0);
+    if self_id == Some(target.id) {
+        return bad("cannot delete your own account");
+    }
+    if target.role == "admin" {
+        let other_admins = db::list_users(&conn)
+            .unwrap_or_default()
+            .iter()
+            .filter(|u| u.enabled && u.role == "admin" && u.id != target.id)
+            .count();
+        if other_admins == 0 {
+            return bad("cannot delete the last admin");
+        }
+    }
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .retain(|_, (user, _)| user != &target.username);
+    match db::delete_user(&conn, target.id) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => db_err(e),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -904,14 +1119,14 @@ impl PingTaskBody {
             return Err("label is required".into());
         }
         if db::ping_kind_from_str(&self.kind).is_none() {
-            return Err("kind must be icmp, tcp or http".into());
+            return Err("kind must be icmp, tcp, http or ssl".into());
         }
         let target = self.target.trim().to_string();
         if !valid_ping_target(&self.kind, &target) {
             return Err("target must be a hostname, IP address or http(s) URL".into());
         }
-        if self.kind == "tcp" && self.port.is_none() {
-            return Err("tcp probes require a port".into());
+        if (self.kind == "tcp" || self.kind == "ssl") && self.port.is_none() {
+            return Err(format!("{} probes require a port", self.kind));
         }
         if !(5..=86_400).contains(&self.interval_sec) {
             return Err("interval_sec must be within 5..=86400".into());
@@ -1780,6 +1995,117 @@ async fn delete_theme(State(state): State<SharedState>, Path(id): Path<String>) 
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => db_err(e),
     }
+}
+
+// ---------------------------------------------------------------- theme store
+
+const THEME_STORE_CACHE_TTL: Duration = Duration::from_secs(300);
+
+fn theme_store_url(state: &SharedState) -> String {
+    let conn = state.db.lock().unwrap();
+    crate::db::get_setting(&conn, "theme_store_url")
+        .ok()
+        .flatten()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| crate::themes::DEFAULT_STORE_URL.to_string())
+}
+
+async fn load_theme_store(state: &SharedState) -> Result<crate::themes::StoreManifest, String> {
+    let url = theme_store_url(state);
+    if let Some(cached) = state.theme_store_cache.lock().unwrap().as_ref() {
+        if cached.1.elapsed() < THEME_STORE_CACHE_TTL {
+            return Ok(cached.0.clone());
+        }
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("无法获取主题商店: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("主题商店返回错误: {e}"))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let manifest = serde_json::from_str::<crate::themes::StoreManifest>(&text)
+        .map_err(|e| format!("主题商店清单格式无效: {e}"))?;
+    *state.theme_store_cache.lock().unwrap() = Some((manifest.clone(), std::time::Instant::now()));
+    Ok(manifest)
+}
+
+async fn theme_store(State(state): State<SharedState>) -> Response {
+    let manifest = match load_theme_store(&state).await {
+        Ok(m) => m,
+        Err(e) => return bad(&e),
+    };
+    let installed: std::collections::HashSet<String> = {
+        let conn = state.db.lock().unwrap();
+        db::list_themes(&conn)
+            .map(|rows| rows.into_iter().map(|r| r.id).collect())
+            .unwrap_or_default()
+    };
+    Json(serde_json::json!({
+        "source": theme_store_url(&state),
+        "themes": manifest.themes,
+        "installed": installed,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallStoreBody {
+    url: String,
+}
+
+async fn install_store_theme(State(state): State<SharedState>, Json(body): Json<InstallStoreBody>) -> Response {
+    let url = body.url.trim().to_string();
+    if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() > 2048 {
+        return bad("invalid theme url");
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return bad(&e.to_string()),
+    };
+    let data = match client.get(&url).send().await {
+        Ok(r) => match r.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => return bad(&format!("下载失败: {e}")),
+        },
+        Err(e) => return bad(&format!("下载失败: {e}")),
+    };
+    if data.len() > MAX_UPLOAD_BYTES {
+        return bad("主题包过大");
+    }
+    let manifest = match themes::install_zip(&state.themes_root, &data) {
+        Ok(m) => m,
+        Err(e) => return bad(&e.to_string()),
+    };
+    let row = db::ThemeRow {
+        id: manifest.id.clone(),
+        name: manifest.name.clone(),
+        version: manifest.version,
+        author: manifest.author,
+        description: manifest.description,
+        preview: manifest.preview,
+        source: "store".into(),
+        dir: format!("themes/{}", manifest.id),
+        installed_at: chrono::Utc::now().timestamp(),
+    };
+    {
+        let conn = state.db.lock().unwrap();
+        if let Err(e) = db::upsert_theme(&conn, &row) {
+            return db_err(e);
+        }
+    }
+    Json(serde_json::json!({ "id": row.id, "name": row.name, "version": row.version }))
+        .into_response()
 }
 
 // ---------------------------------------------------------------- iperf3 log
