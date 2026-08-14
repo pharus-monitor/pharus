@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="doc.title.admin">Pharus · Admin</title>
-  <link rel="stylesheet" href="style.css?v=0.6.3" />
+  <link rel="stylesheet" href="style.css?v=0.6.4" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -33,7 +33,7 @@
         <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
       </div>
       <div class="header-right">
-        <a class="nav-back" href="index" data-i18n="nav.hosts">← 主机列表</a>
+        <a class="nav-back" href="/" data-i18n="nav.hosts">← 主机列表</a>
         <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
         <button id="logout-btn" class="view-toggle" type="button" hidden data-i18n="admin.logout">退出登录</button>
         <span id="conn" class="conn-badge conn-down" role="status">
@@ -60,7 +60,7 @@
         </label>
         <p class="modal-err" id="login-err" hidden></p>
         <div class="modal-actions">
-          <a class="btn ghost" href="index" data-i18n="admin.cancel">取消</a>
+          <a class="btn ghost" href="/" data-i18n="admin.cancel">取消</a>
           <button class="btn primary" id="login-submit" data-i18n="admin.submit">确定</button>
         </div>
       </div>
@@ -90,7 +90,7 @@
       <div class="admin-login-card">
         <h2 data-i18n="admin.disabled">管理未启用</h2>
         <p data-i18n="admin.disabledHint">服务器未设置 PHARUS_ADMIN_PASSWORD，管理接口不可用。</p>
-        <div class="modal-actions"><a class="btn ghost" href="index" data-i18n="admin.cancel">返回</a></div>
+        <div class="modal-actions"><a class="btn ghost" href="/" data-i18n="admin.cancel">返回</a></div>
       </div>
     </section>
   </main>
@@ -131,6 +131,10 @@
           <select id="update-version"></select>
         </label>
         <pre class="update-notes" id="update-notes" hidden></pre>
+        <div class="update-progress" id="update-progress" hidden>
+          <div class="progress-track"><div class="progress-fill" id="update-progress-fill"></div></div>
+          <span class="update-progress-text" id="update-progress-text"></span>
+        </div>
         <p class="modal-err" id="update-err" hidden></p>
         <div class="modal-actions">
           <button class="btn ghost" id="update-cancel" type="button" data-i18n="admin.cancel">取消</button>
@@ -140,8 +144,8 @@
     </div>
   </div>
 
-  <script src="common.js?v=0.6.3"></script>
-  <script src="admin.js?v=0.6.3"></script>
+  <script src="common.js?v=0.6.4"></script>
+  <script src="admin.js?v=0.6.4"></script>
   <script>
     (function () {
       'use strict';
@@ -254,6 +258,8 @@
             var g = agentsMap.get(msg.agent_id) || {};
             g.region = msg.region || null;
             agentsMap.set(msg.agent_id, g);
+          } else if (msg.type === 'update_status' && adminController && adminController.onUpdateStatus) {
+            adminController.onUpdateStatus(msg);
           }
         });
 

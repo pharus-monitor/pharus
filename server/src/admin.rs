@@ -600,6 +600,13 @@ async fn trigger_server_update(
     tokio::spawn(async move {
         if let Err(e) = crate::updates::apply_server_update(&state, version).await {
             tracing::warn!(error = %e, request_id = %rid, "server update failed");
+            state.broadcast(pharus_common::BrowserMsg::UpdateStatus {
+                agent_id: None,
+                kind: "server".into(),
+                phase: "error".into(),
+                done: true,
+                error: Some(e),
+            });
         }
     });
     Json(serde_json::json!({

@@ -359,4 +359,17 @@ pub enum BrowserMsg {
     },
     FeaturesUpdate { agent_id: i64, features: Vec<String> },
     RegionUpdate { agent_id: i64, region: Option<Region> },
+    /// Progress of an online update (agent or server) for the admin console.
+    UpdateStatus {
+        #[serde(default)]
+        agent_id: Option<i64>,
+        /// "agent" | "server"
+        kind: String,
+        /// "downloading" | "verifying" | "applying" | "restarting"
+        phase: String,
+        #[serde(default)]
+        done: bool,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }

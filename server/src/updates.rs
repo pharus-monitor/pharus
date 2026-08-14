@@ -139,6 +139,16 @@ fn unpack(tar_gz: &std::path::Path, dest: &std::path::Path) -> Result<(), anyhow
     Ok(())
 }
 
+fn broadcast_server_status(state: &SharedState, phase: &str, done: bool, error: Option<String>) {
+    state.broadcast(pharus_common::BrowserMsg::UpdateStatus {
+        agent_id: None,
+        kind: "server".into(),
+        phase: phase.to_string(),
+        done,
+        error,
+    });
+}
+
 /// Download, verify and stage a server bundle, then swap binary + themes and
 /// relaunch the server. Called from the admin endpoint; the process exits to
 /// let the replacement take over.
@@ -161,8 +171,10 @@ pub async fn apply_server_update(state: &SharedState, version: String) -> Result
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
 
     let bundle = stage.join("bundle.tar.gz");
+    broadcast_server_status(state, "downloading", false, None);
     let bytes = download(&asset.url).await.map_err(|e| e.to_string())?;
     std::fs::write(&bundle, &bytes).map_err(|e| e.to_string())?;
+    broadcast_server_status(state, "verifying", false, None);
     if sha256_hex(&bytes) != asset.sha256 {
         return Err("sha256 校验失败".into());
     }
@@ -176,10 +188,12 @@ pub async fn apply_server_update(state: &SharedState, version: String) -> Result
 
     #[cfg(unix)]
     {
+        broadcast_server_status(state, "applying", false, None);
         apply_server_replace(&staged_pharus, &staged_themes, &current, &state.themes_root)
             .map_err(|e| e.to_string())?;
         // Let the writer flush whatever it can, then the process exits and the
         // freshly spawned replacement keeps serving.
+        broadcast_server_status(state, "restarting", true, None);
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         std::process::exit(0);
     }

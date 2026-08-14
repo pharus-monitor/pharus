@@ -1397,6 +1397,47 @@
     var updateTarget = null;
     var updateLang = 'zh-CN';
     var updateVersions = [];
+    var updateProgressTarget = null;
+
+    function setUpdateProgress(pct, text) {
+      var prog = document.getElementById('update-progress');
+      var fill = document.getElementById('update-progress-fill');
+      var txt = document.getElementById('update-progress-text');
+      prog.hidden = false;
+      fill.style.width = (pct > 100 ? 100 : pct) + '%';
+      txt.textContent = text || '';
+    }
+
+    var UPDATE_PHASES = {
+      downloading: [30, 'update.downloading'],
+      verifying: [55, 'update.verifying'],
+      applying: [75, 'update.applying'],
+      restarting: [100, 'update.restarting']
+    };
+
+    function onUpdateStatus(msg) {
+      var match = msg.kind === 'server'
+        ? updateProgressTarget === 'server'
+        : msg.kind === 'agent' && updateProgressTarget === msg.agent_id;
+      if (!match) return;
+      if (msg.error) {
+        setUpdateProgress(100, t('update.error') + ': ' + msg.error);
+        document.getElementById('update-confirm').disabled = false;
+        return;
+      }
+      var step = UPDATE_PHASES[msg.phase];
+      if (!step) return;
+      setUpdateProgress(step[0], t(step[1]));
+      // Agent restarts and reconnects on its own; refresh the row version
+      // and close the modal once it is back.
+      if (msg.done && msg.kind === 'agent') {
+        document.getElementById('update-confirm').disabled = false;
+        setTimeout(function () {
+          closeUpdateModal();
+          if (active && currentView === 'updates') loadView();
+        }, 2200);
+      }
+    }
 
     function versionGt(a, b) {
       var pa = String(a).split('.').map(Number);
@@ -1447,7 +1488,9 @@
 
     function closeUpdateModal() {
       document.getElementById('update-modal').hidden = true;
+      document.getElementById('update-progress').hidden = true;
       updateTarget = null;
+      updateProgressTarget = null;
     }
 
     function confirmUpdate() {
@@ -1457,24 +1500,24 @@
       var err = document.getElementById('update-err');
       btn.disabled = true;
       err.hidden = true;
-      var t = updateTarget;
-      var url = t.kind === 'server' ? '/api/admin/update' : '/api/admin/agents/' + t.agentId + '/update';
+      var target = updateTarget;
+      updateProgressTarget = target.kind === 'server' ? 'server' : target.agentId;
+      setUpdateProgress(5, t('common.saving'));
+      var url = target.kind === 'server' ? '/api/admin/update' : '/api/admin/agents/' + target.agentId + '/update';
       options.request(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: version })
       }).then(function () {
-        closeUpdateModal();
-        if (t.kind === 'server') {
-          var hint = node('p', 'panel-message', t('update.restarting'));
-          options.content.insertBefore(hint, options.content.firstChild);
-        } else {
-          loadView();
-        }
+        // Keep the modal open; progress updates arrive over the stream.
+        setUpdateProgress(10, t('common.saving'));
       }).catch(function (error) {
         err.textContent = t('common.error') + ': ' + error.message;
         err.hidden = false;
-      }).then(function () { btn.disabled = false; });
+        document.getElementById('update-progress').hidden = true;
+        updateProgressTarget = null;
+        btn.disabled = false;
+      });
     }
 
     function renderUpdates() {
@@ -1611,7 +1654,8 @@
       },
       notifyAgentUpdate: function () {
         if (active && (currentView === 'regions' || currentView === 'features')) loadView();
-      }
+      },
+      onUpdateStatus: onUpdateStatus
     };
   }
 

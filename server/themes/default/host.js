@@ -7,7 +7,7 @@
 
   var hostId = parseInt(new URLSearchParams(location.search).get('id'), 10);
   if (!Number.isFinite(hostId)) {
-    window.location.href = 'index';
+    window.location.href = '/';
     return;
   }
 

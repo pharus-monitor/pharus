@@ -358,6 +358,13 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             error = error.as_deref().unwrap_or(""),
                             "agent update status"
                         );
+                        state.broadcast(pharus_common::BrowserMsg::UpdateStatus {
+                            agent_id: Some(agent_id),
+                            kind: "agent".into(),
+                            phase,
+                            done,
+                            error,
+                        });
                     }
                     Err(e) => warn!(agent_id, error = %e, "bad agent message"),
                 }

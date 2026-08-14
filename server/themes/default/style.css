@@ -675,6 +675,10 @@ select:focus { outline: none; border-color: var(--beacon-500); }
   max-height: 16rem;
   overflow-y: auto;
 }
+.update-progress { margin: 0.35rem 0 0.75rem; }
+.progress-track { height: 6px; border-radius: 999px; background: rgba(5, 8, 15, 0.35); border: 1px solid var(--border-subtle); overflow: hidden; }
+.progress-fill { height: 100%; width: 0%; border-radius: 999px; background: var(--beacon-500); transition: width 0.3s ease; }
+.update-progress-text { display: block; margin-top: 0.3rem; font-size: 11px; color: var(--text-muted); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
 .modal-err { margin: 0 0 0.75rem; font-size: 12px; color: #f87171; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
@@ -763,7 +767,7 @@ select:focus { outline: none; border-color: var(--beacon-500); }
 
 /* ---------- Host hardware panel ---------- */
 .hw-panel {
-  margin-top: 1rem;
+  margin: 1.5rem 0;
   padding: 1.25rem;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
