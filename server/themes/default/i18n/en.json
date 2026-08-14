@@ -291,7 +291,6 @@
   "host.system": "OS",
   "host.kernel": "Kernel",
   "host.arch": "Arch",
-  "host.version": "Version",
   "host.virt": "Virtualization",
   "host.temperature": "Temperature",
   "host.gpu": "GPU",

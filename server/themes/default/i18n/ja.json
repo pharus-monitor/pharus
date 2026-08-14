@@ -291,7 +291,6 @@
   "host.system": "OS",
   "host.kernel": "カーネル",
   "host.arch": "アーキテクチャ",
-  "host.version": "バージョン",
   "host.virt": "仮想化",
   "host.temperature": "温度",
   "host.gpu": "GPU",

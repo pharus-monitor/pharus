@@ -275,8 +275,7 @@
       [t('host.memory'), info.mem_desc || (entry.data ? P.fmtBytes(entry.data.mem_total) : '—')],
       [t('host.system'), info.os],
       [t('host.kernel'), info.kernel],
-      [t('host.arch'), info.arch],
-      [t('host.version'), entry.app_version]
+      [t('host.arch'), info.arch]
     ];
     if (info.virtualization) items.push([t('host.virt'), info.virtualization]);
     var d = entry.data;

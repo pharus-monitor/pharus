@@ -291,7 +291,6 @@
   "host.system": "系统",
   "host.kernel": "内核",
   "host.arch": "架构",
-  "host.version": "版本",
   "host.virt": "虚拟化",
   "host.temperature": "温度",
   "host.gpu": "GPU",

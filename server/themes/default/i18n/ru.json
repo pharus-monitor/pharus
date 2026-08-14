@@ -291,7 +291,6 @@
   "host.system": "ОС",
   "host.kernel": "Ядро",
   "host.arch": "Архитектура",
-  "host.version": "Версия",
   "host.virt": "Виртуализация",
   "host.temperature": "Температура",
   "host.gpu": "GPU",
