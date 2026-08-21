@@ -204,6 +204,47 @@
           "sha256": "6264cd3510e2f0fc935c258f793c6a7113d2f9e007d08135136ad11f302b1cde"
         }
       }
+    },
+    {
+      "version": "0.7.1",
+      "notes": {
+        "zh-CN": "1. 修复 Agent 在线更新失败：服务加固（ProtectSystem）导致 /usr 只读、无法替换二进制（EROFS），现已允许 Agent 更新自身\n2. 修复面板在线更新跨磁盘分区失败：主题目录改用跨分区安全的复制方式、二进制就地重命名（避开 EXDEV），更新完成后由 systemd 自动重启面板",
+        "en": "1. Fix agent online updates: service hardening (ProtectSystem) made /usr read-only so the agent could not swap its own binary (EROFS); the binary directory is now writable\n2. Fix panel self-update across disk partitions: themes are swapped with a cross-device-safe copy and the binary with an in-place rename (avoids EXDEV); systemd restarts the panel when the update completes",
+        "ja": "1. agent オンライン更新の修正：サービス強化（ProtectSystem）で /usr が読み取り専用になりバイナリを置換できなかった問題（EROFS）を解消。バイナリディレクトリが書き込み可能に\n2. パネル自己更新のパーティション越え失敗を修正：themes はクロスデバイス安全なコピー、バイナリはリネームで置換（EXDEV を回避）。更新完了後は systemd がパネルを自動再起動",
+        "ru": "1. Исправлено онлайн-обновление агента: из-за усиления службы (ProtectSystem) каталог /usr был доступен только для чтения, и агент не мог заменить свой бинарник (EROFS) — теперь каталог бинарника доступен для записи\n2. Исправлено самообновление панели между разделами диска: themes заменяются кросс-устройственным копированием, бинарник — переименованием на месте (без EXDEV); после завершения обновления systemd перезапускает панель"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-linux-x86_64.tar.gz",
+          "sha256": "b8c16ddfb6e1c03e68ce67143319724fc526af8a2628a37b69abd4c73fa2df30"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-linux-aarch64.tar.gz",
+          "sha256": "5260c9a623d01615655a4c62f75738aca01bd4c8492f738390ae0b63a8d014c8"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-linux-i686.tar.gz",
+          "sha256": "f137a6a70bc9d8d8c4077b30cef7abe77d2361bf3be4e91c179a810d734fc9c5"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "6c8008ac9e72967d2faadef50e9685bcef284140c8243169f929c4c0772f16aa"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "f99356c896e266deb462c16b22262a280e5586d4c3d5770f8a9776524aec7e34"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-linux-i686.tar.gz",
+          "sha256": "c7763da01efa9e480eb0e649d08c8d2f96f6f3e3e712ff063867bc2ce3b278c4"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-windows-x86_64.exe",
+          "sha256": "320838fff42cab81c6041deec1a343f5dc84c1ad2fc9ce1edb83049432dfaf7d"
+        }
+      }
     }
   ]
 }
