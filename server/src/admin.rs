@@ -296,13 +296,8 @@ async fn login(State(state): State<SharedState>, req: Request) -> Response {
             "too many failed logins, try again later",
         );
     }
-    let (parts, body) = req.into_parts();
-    let secure = parts.uri.scheme_str() == Some("https")
-        || parts
-            .headers
-            .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.eq_ignore_ascii_case("https"));
+    let secure = request_is_secure(&req);
+    let (_parts, body) = req.into_parts();
     let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
         return err(StatusCode::BAD_REQUEST, "invalid request body");
     };

@@ -193,7 +193,7 @@ fn range_seconds(range: Option<&str>) -> i64 {
 }
 
 fn now() -> i64 {
-    chrono::Utc::now().timestamp()
+    crate::state::now()
 }
 
 async fn meta(State(state): State<SharedState>) -> Response {

@@ -8,6 +8,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
+/// Current Unix timestamp in seconds.
+pub fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
 #[derive(Debug, Default)]
 pub struct TrafficState {
     pub cycle_start: i64,

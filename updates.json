@@ -1,6 +1,47 @@
 {
   "versions": [
     {
+      "version": "0.7.2",
+      "notes": {
+        "zh-CN": "1. 修复告警流量计算：告警规则的流量指标现在正确考虑单向/双向模式和上行/下行方向配置，与计费面板保持一致\n2. 代码重构：提取 platform_string 和 sha256_hex 到公共库，消除 agent 与 server 之间的重复代码\n3. 统一时间戳函数：合并三个独立的 now() 实现为一个共享函数\n4. 代码清理：提取 finish 辅助函数、复用 request_is_secure 等",
+        "en": "1. Fix alert traffic calculation: alert rules now correctly account for uni/bidirectional mode and up/down direction settings, matching the billing panel\n2. Code refactoring: extract platform_string and sha256_hex to shared crate, eliminating duplication between agent and server\n3. Unify timestamp functions: consolidate three separate now() implementations into one shared function\n4. Code cleanup: extract finish helper, reuse request_is_secure, etc.",
+        "ja": "1. アラート流量計算の修正：アラートルールの流量指標が単方向/双方向モードと上り/下り方向の設定を正しく考慮するように（請求パネルと一致）\n2. コードリファクタリング：platform_string と sha256_hex を共通クレートに抽出、agent と server の重複コードを除去\n3. タイムスタンプ関数の統一：3つの独立した now() 実装を1つの共有関数に統合\n4. コードクリーンアップ：finish ヘルパーの抽出、request_is_secure の再利用など",
+        "ru": "1. Исправлен расчёт трафика для алертов: правила алертов теперь корректно учитывают режим однонаправленного/двунаправленного трафика и направление up/down, совпадая с панелью биллинга\n2. Рефакторинг кода: platform_string и sha256_hex вынесены в общую библиотеку, устранено дублирование между agent и server\n3. Унификация функций времени: три отдельных реализации now() объединены в одну общую функцию\n4. Очистка кода: извлечение вспомогательной функции finish, повторное использование request_is_secure и т.д."
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-linux-x86_64.tar.gz",
+          "sha256": ""
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-linux-aarch64.tar.gz",
+          "sha256": ""
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-linux-i686.tar.gz",
+          "sha256": ""
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": ""
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": ""
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-agent-linux-i686.tar.gz",
+          "sha256": ""
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.2/pharus-agent-windows-x86_64.exe",
+          "sha256": ""
+        }
+      }
+    },
+    {
       "version": "0.6.1",
       "notes": {
         "zh-CN": "1. 自定义下拉组件：所有下拉框改为统一样式的自定义组件，支持深浅主题、键盘导航、禁用态、宽度按最长选项自适应\n2. 指标历史面板：CPU / 内存 / 磁盘读写 / 带宽拆分为 2×2 迷你图表，时间范围下拉移至面板标题栏\n3. 磁盘读写速率：agent 上报、服务端存储磁盘读写速率，并显示在历史图表\n4. 无 .html 地址栏：/host、/admin 不再需要 .html 后缀，首页为 /\n5. 受信任反代：同机反向代理的转发头被信任，正确记录真实客户端 IP\n6. 流媒体检测记录：后台新增菜单，跨主机查看最近检测结果\n7. Agent Token 查看：主机列表可直接查看 / 重新签发 agent 通信 token",

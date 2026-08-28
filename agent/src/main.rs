@@ -28,13 +28,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `os-arch` platform string, e.g. "linux-x86_64" / "windows-x86_64", used by
 /// the server to pick the right update asset.
 fn platform_string() -> String {
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        "x86" => "i686",
-        other => other,
-    };
-    format!("{}-{arch}", std::env::consts::OS)
+    pharus_common::platform_string()
 }
 
 #[derive(Parser, Debug)]
@@ -1266,6 +1260,17 @@ where
     })
 }
 
+/// Create a CmdOutput message for a finished diagnostic.
+fn cmd_output_finish(request_id: &str, data: String, exit_code: i32) -> AgentMsg {
+    AgentMsg::CmdOutput {
+        request_id: request_id.to_string(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    }
+}
+
 /// Runs a browser-initiated diagnostic, streaming output back as it arrives.
 /// MTR is reported as one structured result instead, since its report is only
 /// meaningful once complete.
@@ -1277,13 +1282,7 @@ async fn stream_task(
     cycles: Option<u32>,
     extra: Option<serde_json::Value>,
 ) {
-    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
-        request_id: request_id.clone(),
-        stream: "stderr".into(),
-        data,
-        done: true,
-        exit_code: Some(exit_code),
-    };
+    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
 
     if kind == TaskKind::Mtr {
         stream_mtr(msg_tx, request_id, &target, cycles).await;
@@ -1336,13 +1335,7 @@ async fn stream_iperf3(
     target: &str,
     extra: Option<serde_json::Value>,
 ) {
-    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
-        request_id: request_id.clone(),
-        stream: "stderr".into(),
-        data,
-        done: true,
-        exit_code: Some(exit_code),
-    };
+    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
     let port = extra
         .as_ref()
         .and_then(|e| e.get("port"))
@@ -1478,13 +1471,7 @@ fn parse_iperf3_json(text: &str, direction: &str) -> (Option<f64>, Option<u32>, 
 /// mtr's own -c counts discovery rounds, so a slowly-discovered target would
 /// otherwise see far fewer probes than requested.
 async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Option<u32>) {
-    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
-        request_id: request_id.clone(),
-        stream: "stderr".into(),
-        data,
-        done: true,
-        exit_code: Some(exit_code),
-    };
+    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
     let wanted = cycles.unwrap_or(10).clamp(1, 30);
     // Resolve now so the target hop can be recognized by its h-line address.
     let target_ips: Vec<std::net::IpAddr> = match target.parse() {
@@ -1623,14 +1610,7 @@ fn update_status(msg_tx: &MsgTx, request_id: &str, phase: &str, done: bool, erro
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    pharus_common::sha256_hex(data)
 }
 
 async fn download_asset(url: &str) -> Result<Vec<u8>> {

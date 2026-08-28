@@ -462,3 +462,27 @@ pub enum BrowserMsg {
     },
     Containers { agent_id: i64, containers: Vec<ContainerInfo> },
 }
+
+/// `os-arch` platform string, e.g. "linux-x86_64" / "windows-x86_64", used by
+/// the server to pick the right update asset.
+pub fn platform_string() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        "x86" => "i686",
+        other => other,
+    };
+    format!("{}-{arch}", std::env::consts::OS)
+}
+
+/// Compute SHA-256 hash of data and return it as a hex string.
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}

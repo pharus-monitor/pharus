@@ -338,10 +338,17 @@ fn snapshot_agents(state: &SharedState) -> Result<Vec<AgentSnapshot>> {
             name: agent.name.clone(),
             online: agent.online,
             data: agent.data.clone(),
-            traffic_used: agent
-                .traffic
-                .rx_bytes
-                .saturating_add(agent.traffic.tx_bytes),
+            traffic_used: {
+                let traffic = &agent.traffic;
+                match agent.billing.as_ref().and_then(|b| b.traffic_mode.as_deref()) {
+                    Some("uni") => match agent.billing.as_ref().and_then(|b| b.traffic_dir.as_deref()) {
+                        Some("up") => traffic.tx_bytes,
+                        Some("max") => traffic.rx_bytes.max(traffic.tx_bytes),
+                        _ => traffic.rx_bytes,
+                    },
+                    _ => traffic.rx_bytes.saturating_add(traffic.tx_bytes),
+                }
+            },
             traffic_quota: agent
                 .billing
                 .as_ref()

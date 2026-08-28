@@ -8,7 +8,7 @@ use crate::features;
 use crate::regions;
 use crate::state::SharedState;
 use pharus_common::{BrowserMsg, MtrHop, ServerToAgentMsg, TaskKind};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// A request whose output frames have not finished arriving yet.
@@ -48,10 +48,7 @@ pub enum DiagError {
 }
 
 fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::state::now()
 }
 
 fn setting_usize(state: &SharedState, key: &str, default: usize) -> usize {

@@ -107,13 +107,7 @@ pub fn asset_kind(platform: &str) -> &'static str {
 
 /// This server's platform string (e.g. "linux-x86_64").
 pub fn server_platform() -> String {
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        "x86" => "i686",
-        other => other,
-    };
-    format!("{}-{arch}", std::env::consts::OS)
+    pharus_common::platform_string()
 }
 
 async fn download(url: &str) -> Result<Vec<u8>, anyhow::Error> {
@@ -125,10 +119,7 @@ async fn download(url: &str) -> Result<Vec<u8>, anyhow::Error> {
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    pharus_common::sha256_hex(data)
 }
 
 fn unpack(tar_gz: &std::path::Path, dest: &std::path::Path) -> Result<(), anyhow::Error> {
