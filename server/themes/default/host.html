@@ -198,6 +198,29 @@
             </label>
             <button class="btn" id="diag-speedtest-btn" type="button" data-i18n="diag.speedtest">内置测速</button>
           </div>
+          <div class="speedtest-chart-container" id="speedtest-chart-container" hidden>
+            <canvas id="speedtest-chart" class="speedtest-chart"></canvas>
+            <div class="speedtest-result" id="speedtest-result">
+              <div class="speedtest-gauge">
+                <div class="speedtest-gauge-value" id="speedtest-gauge-value">0</div>
+                <div class="speedtest-gauge-unit" id="speedtest-gauge-unit">Mbps</div>
+              </div>
+              <div class="speedtest-stats">
+                <div class="speedtest-stat">
+                  <span class="speedtest-stat-label" data-i18n="diag.directionDown">下载</span>
+                  <span class="speedtest-stat-value" id="speedtest-down">--</span>
+                </div>
+                <div class="speedtest-stat">
+                  <span class="speedtest-stat-label" data-i18n="diag.directionUp">上传</span>
+                  <span class="speedtest-stat-value" id="speedtest-up">--</span>
+                </div>
+                <div class="speedtest-stat">
+                  <span class="speedtest-stat-label" data-i18n="diag.duration">时长</span>
+                  <span class="speedtest-stat-value" id="speedtest-duration">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <p class="panel-message error" id="diag-error" role="alert" hidden></p>
         <div class="diag-sessions" id="diag-sessions"></div>

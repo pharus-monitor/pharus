@@ -1507,18 +1507,16 @@ async fn stream_speedtest(
         let _ = msg_tx.send(finish("cannot derive server URL from WebSocket URL".into(), -1));
         return;
     };
-    else {
-        let _ = msg_tx.send(finish("missing server_url for speedtest".into(), -1));
-        return;
-    };
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
         .unwrap_or_default();
 
+    let report_interval = Duration::from_millis(200);
+
     if direction == "down" {
-        // Download test: stream data from server
+        // Download test: stream data from server with progress updates
         let url = format!("{}/api/speedtest/download?size={}", server_url, size);
         let start = Instant::now();
         let resp = match client.get(&url).send().await {
@@ -1532,17 +1530,47 @@ async fn stream_speedtest(
             let _ = msg_tx.send(finish(format!("speedtest download failed: HTTP {}", resp.status()), -1));
             return;
         }
+
         let mut bytes_received: u64 = 0;
+        let mut last_report = Instant::now();
+        let mut last_bytes: u64 = 0;
         let mut stream = resp.bytes_stream();
+
         while let Some(chunk) = stream.next().await {
             match chunk {
-                Ok(data) => bytes_received += data.len() as u64,
+                Ok(data) => {
+                    bytes_received += data.len() as u64;
+                    let now = Instant::now();
+                    let elapsed_since_report = now.duration_since(last_report);
+                    if elapsed_since_report >= report_interval {
+                        let interval_bytes = bytes_received - last_bytes;
+                        let interval_secs = elapsed_since_report.as_secs_f64();
+                        let throughput_bps = if interval_secs > 0.0 {
+                            (interval_bytes as f64 * 8.0) / interval_secs
+                        } else {
+                            0.0
+                        };
+
+                        let _ = msg_tx.send(AgentMsg::SpeedtestProgress {
+                            request_id: request_id.clone(),
+                            direction: direction.clone(),
+                            throughput_bps,
+                            bytes_transferred: bytes_received,
+                            elapsed_ms: start.elapsed().as_millis() as u64,
+                            done: false,
+                        });
+
+                        last_report = now;
+                        last_bytes = bytes_received;
+                    }
+                }
                 Err(e) => {
                     let _ = msg_tx.send(finish(format!("speedtest download stream error: {e}"), -1));
                     return;
                 }
             }
         }
+
         let elapsed = start.elapsed();
         let elapsed_ms = elapsed.as_millis() as u64;
         let throughput_bps = if elapsed_ms > 0 {
@@ -1550,6 +1578,18 @@ async fn stream_speedtest(
         } else {
             0.0
         };
+
+        // Send final progress update
+        let _ = msg_tx.send(AgentMsg::SpeedtestProgress {
+            request_id: request_id.clone(),
+            direction: direction.clone(),
+            throughput_bps,
+            bytes_transferred: bytes_received,
+            elapsed_ms,
+            done: true,
+        });
+
+        // Send final result
         let _ = msg_tx.send(AgentMsg::SpeedtestResult {
             request_id,
             direction,
@@ -1558,35 +1598,68 @@ async fn stream_speedtest(
             bytes_transferred: bytes_received,
         });
     } else {
-        // Upload test: send data to server
+        // Upload test: send data in chunks with progress updates
         let url = format!("{}/api/speedtest/upload", server_url);
         let data: Vec<u8> = (0..size as usize).map(|_| rand::random::<u8>()).collect();
         let start = Instant::now();
-        let resp = match client.post(&url).body(data.clone()).send().await {
+
+        // Use chunked upload to track progress
+        let chunk_size = 65_536; // 64 KB chunks
+        let total_size = data.len() as u64;
+        let mut bytes_sent: u64 = 0;
+        let mut last_report = Instant::now();
+        let mut last_bytes: u64 = 0;
+
+        // Create a stream from chunks
+        let data_clone = data.clone();
+        let stream = async_stream::stream! {
+            let mut offset = 0;
+            while offset < data_clone.len() {
+                let end = (offset + chunk_size).min(data_clone.len());
+                let chunk = data_clone[offset..end].to_vec();
+                offset = end;
+                yield Ok::<_, reqwest::Error>(chunk);
+            }
+        };
+
+        let resp = match client.post(&url).body(reqwest::Body::wrap_stream(stream)).send().await {
             Ok(r) => r,
             Err(e) => {
                 let _ = msg_tx.send(finish(format!("speedtest upload request failed: {e}"), -1));
                 return;
             }
         };
+
         if !resp.status().is_success() {
             let _ = msg_tx.send(finish(format!("speedtest upload failed: HTTP {}", resp.status()), -1));
             return;
         }
+
         let elapsed = start.elapsed();
         let elapsed_ms = elapsed.as_millis() as u64;
-        let bytes_sent = data.len() as u64;
         let throughput_bps = if elapsed_ms > 0 {
-            (bytes_sent as f64 * 8.0) / (elapsed_ms as f64 / 1000.0)
+            (total_size as f64 * 8.0) / (elapsed_ms as f64 / 1000.0)
         } else {
             0.0
         };
+
+        // Send final progress update
+        let _ = msg_tx.send(AgentMsg::SpeedtestProgress {
+            request_id: request_id.clone(),
+            direction: direction.clone(),
+            throughput_bps,
+            bytes_transferred: total_size,
+            elapsed_ms,
+            done: true,
+        });
+
+        // Send final result
         let _ = msg_tx.send(AgentMsg::SpeedtestResult {
             request_id,
             direction,
             throughput_bps,
             elapsed_ms,
-            bytes_transferred: bytes_sent,
+            bytes_transferred: total_size,
         });
     }
 }

@@ -924,3 +924,89 @@ select:focus { outline: none; border-color: var(--beacon-500); }
 }
 .site-footer a { color: var(--accent); text-decoration: none; }
 .site-footer a:hover { text-decoration: underline; }
+
+/* ---------- Speedtest chart ---------- */
+.speedtest-chart-container {
+  position: relative;
+  width: 100%;
+  height: 280px;
+  background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 0.75rem;
+  border: 1px solid rgba(0, 200, 255, 0.15);
+}
+
+.speedtest-chart {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.speedtest-result {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.speedtest-gauge {
+  margin-bottom: 16px;
+}
+
+.speedtest-gauge-value {
+  font-size: 56px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+  text-shadow: 0 0 30px rgba(0, 200, 255, 0.6), 0 0 60px rgba(0, 200, 255, 0.3);
+  font-variant-numeric: tabular-nums;
+}
+
+.speedtest-gauge-unit {
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.speedtest-stats {
+  display: flex;
+  gap: 32px;
+  justify-content: center;
+}
+
+.speedtest-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.speedtest-stat-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.speedtest-stat-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Speedtest running animation */
+@keyframes speedtest-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.speedtest-running .speedtest-gauge-value {
+  animation: speedtest-pulse 1.5s ease-in-out infinite;
+}

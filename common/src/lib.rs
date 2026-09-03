@@ -317,6 +317,21 @@ pub enum AgentMsg {
         /// Total bytes transferred.
         bytes_transferred: u64,
     },
+    /// Real-time progress update during a speedtest (sent every ~200ms).
+    SpeedtestProgress {
+        request_id: String,
+        /// "down" | "up"
+        direction: String,
+        /// Current sample throughput in bits per second.
+        throughput_bps: f64,
+        /// Total bytes transferred so far.
+        bytes_transferred: u64,
+        /// Elapsed time in milliseconds for the current phase.
+        elapsed_ms: u64,
+        /// True when this is the final progress update for the phase.
+        #[serde(default)]
+        done: bool,
+    },
     /// Agent-side region detection reported once per connection.
     Region { code: String },
     /// Progress of a server-triggered online update.

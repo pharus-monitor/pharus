@@ -581,6 +581,46 @@ pub fn relay_speedtest(
     });
 }
 
+/// Relay a real-time speedtest progress update to the requesting browser.
+pub fn relay_speedtest_progress(
+    state: &SharedState,
+    agent_id: i64,
+    request_id: String,
+    direction: String,
+    throughput_bps: f64,
+    bytes_transferred: u64,
+    elapsed_ms: u64,
+    done: bool,
+) {
+    // Don't consume the pending entry for progress updates (only for final result)
+    if state
+        .diag_pending
+        .lock()
+        .unwrap()
+        .get(&request_id)
+        .is_none()
+    {
+        return;
+    }
+    let result = serde_json::json!({
+        "direction": direction,
+        "throughput_bps": throughput_bps,
+        "bytes_transferred": bytes_transferred,
+        "elapsed_ms": elapsed_ms,
+        "done": done,
+    });
+    state.broadcast(BrowserMsg::DiagResult {
+        request_id,
+        agent_id,
+        kind: "speedtest".into(),
+        stream: Some("progress".into()),
+        data: None,
+        result: Some(result),
+        done: false,
+        exit_code: None,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::valid_target;

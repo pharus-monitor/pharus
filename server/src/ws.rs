@@ -372,6 +372,25 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             bytes_transferred,
                         );
                     }
+                    Ok(AgentMsg::SpeedtestProgress {
+                        request_id,
+                        direction,
+                        throughput_bps,
+                        bytes_transferred,
+                        elapsed_ms,
+                        done,
+                    }) => {
+                        crate::diag::relay_speedtest_progress(
+                            &state,
+                            agent_id,
+                            request_id,
+                            direction,
+                            throughput_bps,
+                            bytes_transferred,
+                            elapsed_ms,
+                            done,
+                        );
+                    }
                     Ok(AgentMsg::Auth { .. }) => {
                         warn!(agent_id, "unexpected re-auth, dropping");
                         break;

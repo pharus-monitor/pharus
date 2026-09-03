@@ -1111,7 +1111,14 @@
       } else if (message.kind === 'iperf3' && typeof message.result === 'object') {
         renderIperf3Result(request, message.result);
       } else if (message.kind === 'speedtest' && typeof message.result === 'object') {
-        renderSpeedtestResult(request, message.result);
+        if (message.stream === 'progress') {
+          // Real-time progress update
+          handleSpeedtestProgress(message);
+        } else {
+          // Final result
+          renderSpeedtestResult(request, message.result);
+          speedtestState.finalResult = message.result;
+        }
       } else {
         appendDiagnosticPart(request, JSON.stringify(message.result, null, 2) + '\n', 'structured');
       }
@@ -1141,6 +1148,252 @@
     if (result.retransmits != null) lines.push(t('diag.retransmits') + ': ' + result.retransmits);
     if (result.duration_s != null) lines.push(t('diag.duration') + ': ' + Number(result.duration_s).toFixed(1) + ' s');
     appendDiagnosticPart(request, lines.join('\n') + '\n', 'structured');
+  }
+
+  /* ---------- Speedtest real-time chart ---------- */
+  var speedtestState = {
+    running: false,
+    direction: null,
+    requestId: null,
+    points: [],
+    finalResult: null,
+  };
+
+  function showSpeedtestChart(direction) {
+    resetSpeedtestState();
+    speedtestState.direction = direction;
+    speedtestState.running = true;
+    var container = document.getElementById('speedtest-chart-container');
+    if (container) container.hidden = false;
+    var resultEl = document.getElementById('speedtest-result');
+    if (resultEl) resultEl.classList.add('speedtest-running');
+    // Reset display
+    var gaugeValue = document.getElementById('speedtest-gauge-value');
+    var gaugeUnit = document.getElementById('speedtest-gauge-unit');
+    if (gaugeValue) gaugeValue.textContent = '0';
+    if (gaugeUnit) gaugeUnit.textContent = 'Mbps';
+    document.getElementById('speedtest-down').textContent = '--';
+    document.getElementById('speedtest-up').textContent = '--';
+    document.getElementById('speedtest-duration').textContent = '--';
+  }
+
+  function resetSpeedtestState() {
+    speedtestState = {
+      running: false,
+      direction: null,
+      requestId: null,
+      points: [],
+      finalResult: null,
+    };
+    var container = document.getElementById('speedtest-chart-container');
+    if (container) container.hidden = true;
+    var resultEl = document.getElementById('speedtest-result');
+    if (resultEl) resultEl.classList.remove('speedtest-running');
+  }
+
+  function handleSpeedtestProgress(message) {
+    var result = message.result;
+    if (!result) return;
+
+    speedtestState.running = !result.done;
+    speedtestState.direction = result.direction;
+
+    if (!result.done) {
+      // Add data point
+      speedtestState.points.push({
+        time: result.elapsed_ms,
+        bps: result.throughput_bps,
+      });
+
+      // Update gauge
+      updateSpeedtestGauge(result.throughput_bps);
+
+      // Update duration
+      var durationEl = document.getElementById('speedtest-duration');
+      if (durationEl && result.elapsed_ms) {
+        durationEl.textContent = (result.elapsed_ms / 1000).toFixed(1) + ' s';
+      }
+    } else {
+      // Final progress update - update stats
+      var resultEl = document.getElementById('speedtest-result');
+      if (resultEl) resultEl.classList.remove('speedtest-running');
+
+      if (result.direction === 'down') {
+        var downEl = document.getElementById('speedtest-down');
+        if (downEl && result.throughput_bps) {
+          downEl.textContent = iperfMbps(result.throughput_bps);
+        }
+      } else {
+        var upEl = document.getElementById('speedtest-up');
+        if (upEl && result.throughput_bps) {
+          upEl.textContent = iperfMbps(result.throughput_bps);
+        }
+      }
+    }
+
+    // Redraw chart
+    drawSpeedtestChart();
+  }
+
+  function updateSpeedtestGauge(bps) {
+    var mbps = Number(bps) / 1e6;
+    var valueEl = document.getElementById('speedtest-gauge-value');
+    var unitEl = document.getElementById('speedtest-gauge-unit');
+
+    if (!valueEl || !unitEl) return;
+
+    if (mbps >= 1000) {
+      valueEl.textContent = (mbps / 1000).toFixed(2);
+      unitEl.textContent = 'Gbps';
+    } else {
+      valueEl.textContent = mbps.toFixed(1);
+      unitEl.textContent = 'Mbps';
+    }
+  }
+
+  function drawSpeedtestChart() {
+    var canvas = document.getElementById('speedtest-chart');
+    if (!canvas) return;
+
+    var rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(rect.width * ratio);
+    canvas.height = Math.round(rect.height * ratio);
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    var points = speedtestState.points;
+    if (points.length < 2) return;
+
+    // Calculate plot area
+    var left = 55, right = 25, top = 20, bottom = 35;
+    var plotWidth = rect.width - left - right;
+    var plotHeight = rect.height - top - bottom;
+
+    // Calculate max values
+    var maxBps = 0;
+    points.forEach(function (p) {
+      if (p.bps > maxBps) maxBps = p.bps;
+    });
+    // Round up to nice number
+    var maxMbps = maxBps / 1e6;
+    if (maxMbps <= 10) maxMbps = 10;
+    else if (maxMbps <= 50) maxMbps = Math.ceil(maxMbps / 10) * 10;
+    else if (maxMbps <= 100) maxMbps = Math.ceil(maxMbps / 20) * 20;
+    else if (maxMbps <= 500) maxMbps = Math.ceil(maxMbps / 50) * 50;
+    else maxMbps = Math.ceil(maxMbps / 100) * 100;
+    maxBps = maxMbps * 1e6;
+
+    var maxTime = points[points.length - 1].time;
+    if (maxTime < 1000) maxTime = 1000; // At least 1 second
+
+    // Coordinate transforms
+    function xAt(t) { return left + (t / maxTime) * plotWidth; }
+    function yAt(bps) { return top + (1 - bps / maxBps) * plotHeight; }
+
+    // Draw grid lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    for (var i = 0; i <= 4; i++) {
+      var y = top + plotHeight * i / 4;
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(left + plotWidth, y);
+      ctx.stroke();
+
+      // Y axis labels
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      var labelMbps = maxMbps * (1 - i / 4);
+      ctx.fillText(labelMbps >= 1000 ? (labelMbps / 1000).toFixed(1) + 'G' : labelMbps.toFixed(0) + 'M', left - 8, y);
+    }
+
+    // Draw time axis labels
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    var timeSteps = Math.min(5, Math.ceil(maxTime / 1000));
+    for (var i = 0; i <= timeSteps; i++) {
+      var t = (maxTime / timeSteps) * i;
+      var x = xAt(t);
+      ctx.fillText((t / 1000).toFixed(1) + 's', x, top + plotHeight + 8);
+
+      // Vertical grid line
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, top + plotHeight);
+      ctx.stroke();
+    }
+
+    // Create gradient for fill
+    var gradient = ctx.createLinearGradient(0, top, 0, top + plotHeight);
+    gradient.addColorStop(0, 'rgba(0, 200, 255, 0.3)');
+    gradient.addColorStop(1, 'rgba(0, 200, 255, 0.02)');
+
+    // Draw filled area
+    ctx.beginPath();
+    ctx.moveTo(xAt(points[0].time), yAt(points[0].bps));
+    for (var i = 1; i < points.length; i++) {
+      // Smooth curve using quadratic bezier
+      var x0 = xAt(points[i - 1].time);
+      var y0 = yAt(points[i - 1].bps);
+      var x1 = xAt(points[i].time);
+      var y1 = yAt(points[i].bps);
+      var cpx = (x0 + x1) / 2;
+      ctx.quadraticCurveTo(cpx, y0, x1, y1);
+    }
+    ctx.lineTo(xAt(points[points.length - 1].time), top + plotHeight);
+    ctx.lineTo(xAt(points[0].time), top + plotHeight);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Draw line
+    ctx.beginPath();
+    ctx.moveTo(xAt(points[0].time), yAt(points[0].bps));
+    for (var i = 1; i < points.length; i++) {
+      var x0 = xAt(points[i - 1].time);
+      var y0 = yAt(points[i - 1].bps);
+      var x1 = xAt(points[i].time);
+      var y1 = yAt(points[i].bps);
+      var cpx = (x0 + x1) / 2;
+      ctx.quadraticCurveTo(cpx, y0, x1, y1);
+    }
+    ctx.strokeStyle = '#00c8ff';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = 'rgba(0, 200, 255, 0.5)';
+    ctx.shadowBlur = 10;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Draw current point
+    if (points.length > 0) {
+      var lastPoint = points[points.length - 1];
+      var lx = xAt(lastPoint.time);
+      var ly = yAt(lastPoint.bps);
+
+      // Glow effect
+      ctx.beginPath();
+      ctx.arc(lx, ly, 8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0, 200, 255, 0.3)';
+      ctx.fill();
+
+      // Inner circle
+      ctx.beginPath();
+      ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#00c8ff';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
   }
 
   /* Renders the structured speedtest summary into the diagnostic session. */
@@ -1313,12 +1566,17 @@
     var size = parseInt(diagSpeedtestSize.value, 10) || 10485760;
     var direction = diagSpeedtestDir.value;
     var body = { agent_id: hostId, size: size, direction: direction };
+
+    // Show chart container and reset state
+    showSpeedtestChart(direction);
+
     P.requestJson('/api/diag/speedtest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(function (response) {
       if (!response.request_id) throw new Error(t('diag.missingRequestId'));
+      speedtestState.requestId = response.request_id;
       createDiagnosticSession(response.request_id, hostId, 'speedtest', t('diag.speedtest') + ' · ' + (direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
     }).catch(function (error) {
       diagError.textContent = t('common.error') + ': ' + (error && error.message ? error.message : error);
