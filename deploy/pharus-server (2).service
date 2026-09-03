@@ -1,0 +1,24 @@
+[Unit]
+Description=Pharus monitoring server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pharus
+Group=pharus
+Environment=PHARUS_ADDR=0.0.0.0:8080
+Environment=PHARUS_DB=/var/lib/pharus/pharus.db
+Environment=PHARUS_THEMES=/var/lib/pharus/themes
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/pharus serve
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+# online self-update swaps the binary; open just its own directory
+ReadWritePaths=/var/lib/pharus /usr/local/bin
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

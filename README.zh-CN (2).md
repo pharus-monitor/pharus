@@ -1,0 +1,137 @@
+# Pharus · 灯塔
+
+> **Pharus**（古希腊语 *pharos*，灯塔）—— 用 Rust 编写的轻量级服务器监控系统。
+> 每台被监控机如海上一个点，Pharus 是那座持续守望的灯塔。
+
+一个用 Rust 编写的轻量级服务器监控系统。
+
+[English](README.md)
+
+## 特性
+
+- **Rust 全栈**：Agent 常驻内存 1–3MB 级别，无 GC 停顿
+- **单二进制**：无运行时依赖，musl 静态链接，适配各种 VPS
+- **实时推送**：WebSocket 双端推送，前端免轮询
+- **SQLite 存储**：单文件零运维，60s 降采样历史
+- **主题系统**：前端整模板可替换，`themes/` 加载 + `current_theme` 切换
+- **多语言界面**：English / 中文 / 日本語 / Русский，自动匹配浏览器语言
+- **断线重连**：指数退避 1s 到 30s 封顶；15s 无上报判定离线
+- **Ping 监控**：ICMP / TCP / HTTP 定时探测任务，延迟与丢包历史曲线（悬停即可读出任一点的数值）
+- **实时网络诊断**：Looking Glass（ping / 路由追踪）、逐行刷新的 MTR 动态表格、iperf3 带宽测速——结果从 agent 实时流入浏览器
+- **流媒体解锁检测**：定时检测 Netflix / YouTube Premium / Disney+ / ChatGPT 可用性
+- **告警规则**：指标 / 主机离线 / 任务失败三类规则，支持评估窗口、样本比例与冷却时间；通知渠道覆盖 Bark、钉钉、Discord、邮件、飞书、Telegram、Webhook、企业微信
+- **区域分组与拖拽排序**：按地区分组展示，卡片与分组均可拖拽排序，顺序保存在服务端，所有访客看到同一布局
+- **管理后台**：账号密码登录，管理账单、探测任务、自定义脚本任务、告警、渠道、区域与功能开关
+- **默认保护隐私**：公开面板上的主机 IP 打码显示，MTR/路由追踪隐藏第一跳（网关）地址
+
+## 架构
+
+Agent 主动出站连 Server（NAT 友好），单连接双向复用；Server 内存保存实时状态，
+每 60s 降采样写入 SQLite，并经 `/api/stream` 把增量推给浏览器。
+
+## 快速开始
+
+预编译静态二进制（x86_64 / i686 / aarch64，musl，任何发行版可直接运行）见
+[Releases](https://github.com/pharus-monitor/pharus/releases)：
+
+```bash
+# 0. 下载并解压 Server（内含 pharus + themes/ + deploy/）
+curl -fLO https://github.com/pharus-monitor/pharus/releases/latest/download/pharus-linux-x86_64.tar.gz
+tar -xzf pharus-linux-x86_64.tar.gz
+
+# 1. 注册一台被监控机，得到 token
+./pharus add-agent --name my-vps
+
+# 2. 启动 Server（默认 0.0.0.0:8080）
+./pharus serve --themes themes
+
+# 3. 在被监控机上启动 Agent
+./pharus-agent --server ws://<server>:8080/ws/agent --token <token>
+```
+
+也可以用一键脚本安装 Agent（自动识别架构并配置 systemd）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pharus-monitor/pharus/main/scripts/install-agent.sh | sudo bash -s -- \
+  --server ws://<server>:8080/ws/agent --token <token>
+```
+
+打开 `http://<server>:8080` 即可看到实时面板。
+
+如需从源码构建：`cargo build --release`。
+
+> 生产环境完整部署（systemd、Docker、HTTPS 反代、Windows 被控端、排错）：
+> **[docs/deployment.zh-CN.md](docs/deployment.zh-CN.md)**
+
+### 配置
+
+Server 与 Agent 均支持命令行参数与环境变量：
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `PHARUS_ADDR` | Server 监听地址 | `0.0.0.0:8080` |
+| `PHARUS_DB` | SQLite 路径 | `pharus.db` |
+| `PHARUS_THEMES` | 主题根目录 | `themes` |
+| `PHARUS_SERVER` | Agent 连接地址 | — |
+| `PHARUS_TOKEN` | Agent 令牌 | — |
+| `PHARUS_INTERVAL` | 上报间隔（秒） | `3` |
+| `PHARUS_ADMIN_USER` | 管理后台用户名 | `admin` |
+| `PHARUS_ADMIN_PASSWORD` | 管理后台密码（不设置则管理 API 关闭） | — |
+
+Agent 也支持 TOML 配置文件（`--config agent.toml`）：
+
+```toml
+server = "wss://example.com/ws/agent"
+token = "..."
+interval = 3
+```
+
+## Docker
+
+```bash
+docker compose up -d                    # server
+docker compose --profile agent up -d    # 同机跑 agent（可选）
+```
+
+`themes/` 与 `data/`（SQLite）通过卷持久化。
+
+## 主题开发
+
+主题是纯静态文件目录（HTML/CSS/JS），无构建步骤、无 CDN 依赖。Server 托管
+`themes/<current_theme>/` 作为站点根。数据通过 WebSocket `/api/stream` 获取
+（JSON 增量协议），兜底 REST `/api/status`。翻译文件在主题内的 `i18n/*.json`。
+参考内置 `server/themes/default/`。
+
+运行时切换主题，无需重启：
+
+```bash
+./pharus set-theme --name <theme>
+```
+
+## 账单与流量
+
+面板支持按机器记录账单信息：计费周期流量（可设每月重置日）、流量配额
+（用量进度条，>80% 变黄、>95% 变红）、到期时间（倒计时，≤7 天变红）、
+续费价格（人民币/美元/欧元，月付/季付/年付）。头部概览按币种汇总月成本。
+
+流量由 agent 上报的开机累计字节数差值统计，agent 重启不丢用量。
+周期重置边界与到期日均按 **server 本地时区** 解释。v0.0.x 旧版 agent
+不上报计数器，仅无流量数据，其余功能不受影响。
+
+在 server 上设置 `PHARUS_ADMIN_PASSWORD` 后，打开 `admin.html`（面板右上角有入口）
+登录即可管理账单、任务、告警、区域与功能开关。未设置时管理 API 保持关闭，面板只读。
+
+> 账单信息在公开面板上可见（与其他数据一致）。价格敏感时请将整站置于
+> 带鉴权的反向代理之后。
+
+## 协议
+
+两端共享的消息结构定义在 `common/` crate，JSON over WebSocket：
+
+- `AgentMsg`：`auth` / `sys_info` / `metrics` / `ping` / `task_result` / `unlock` / `cmd_output` / `mtr_result` / `region`
+- `ServerToAgentMsg`：`auth_ok` / `auth_fail` / `run_task` / 任务与开关同步
+- `BrowserMsg`：`snapshot` / `metrics` / `status` / `billing` / `pings` / `unlock` / `diag_result` / `region_update` / `features_update`
+
+## License
+
+MIT

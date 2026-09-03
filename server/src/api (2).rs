@@ -9,7 +9,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use futures_util::StreamExt;
 use serde::Deserialize;
 
 pub fn err(status: StatusCode, msg: &str) -> Response {
@@ -178,9 +177,6 @@ pub fn router() -> Router<SharedState> {
         .route("/api/diag/lg", post(diag_lg))
         .route("/api/diag/mtr", post(diag_mtr))
         .route("/api/diag/iperf3", post(diag_iperf3))
-        .route("/api/diag/speedtest", post(diag_speedtest))
-        .route("/api/speedtest/download", get(speedtest_download))
-        .route("/api/speedtest/upload", post(speedtest_upload))
 }
 
 /// Newest-first row cap, chosen so a 7 day window at the 60s history interval
@@ -197,7 +193,7 @@ fn range_seconds(range: Option<&str>) -> i64 {
 }
 
 fn now() -> i64 {
-    crate::state::now()
+    chrono::Utc::now().timestamp()
 }
 
 async fn meta(State(state): State<SharedState>) -> Response {
@@ -441,79 +437,4 @@ async fn diag_iperf3(State(state): State<SharedState>, req: Request) -> Response
         &protocol,
         length,
     ))
-}
-
-#[derive(Debug, Deserialize)]
-struct SpeedtestRequest {
-    agent_id: i64,
-    size: Option<u64>,
-    direction: Option<String>,
-}
-
-async fn diag_speedtest(State(state): State<SharedState>, req: Request) -> Response {
-    let (ip, body) = match take_json::<SpeedtestRequest>(&state, req).await {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
-    let size = body.size.unwrap_or(10_485_760).clamp(1_048_576, 104_857_600);
-    let direction = body.direction.unwrap_or_else(|| "down".into());
-    if direction != "down" && direction != "up" {
-        return err(StatusCode::UNPROCESSABLE_ENTITY, "direction 必须为 up 或 down");
-    }
-    diag_response(diag::start_speedtest(&state, &ip, body.agent_id, size, &direction))
-}
-
-/// Download endpoint for built-in speedtest: streams random data to the agent.
-async fn speedtest_download(req: Request) -> Response {
-    let size: u64 = req
-        .uri()
-        .query()
-        .and_then(|q| {
-            url::form_urlencoded::parse(q.as_bytes())
-                .find(|(k, _)| k == "size")
-                .and_then(|(_, v)| v.parse().ok())
-        })
-        .unwrap_or(10_485_760)
-        .clamp(1_048_576, 104_857_600);
-
-    let stream = async_stream::stream! {
-        let mut remaining = size;
-        let chunk_size = 65_536u64;
-        while remaining > 0 {
-            let len = remaining.min(chunk_size) as usize;
-            let chunk: Vec<u8> = (0..len).map(|_| rand::random::<u8>()).collect();
-            remaining -= len as u64;
-            yield Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(chunk));
-        }
-    };
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/octet-stream")
-        .header("Content-Length", size.to_string())
-        .header("Cache-Control", "no-store")
-        .body(axum::body::Body::from_stream(stream))
-        .unwrap()
-}
-
-/// Upload endpoint for built-in speedtest: receives and discards the body.
-async fn speedtest_upload(req: Request) -> Response {
-    let start = std::time::Instant::now();
-    let body = req.into_body();
-    let mut bytes_received: u64 = 0;
-
-    let mut stream = body.into_data_stream();
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(data) => bytes_received += data.len() as u64,
-            Err(_) => break,
-        }
-    }
-
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-    axum::Json(serde_json::json!({
-        "bytes": bytes_received,
-        "elapsed_ms": elapsed_ms,
-    }))
-    .into_response()
 }

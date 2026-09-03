@@ -35,3 +35,6 @@ clap = { version = "4", features = ["derive", "env"] }
 sha2 = "0.10"
 tar = "0.4"
 flate2 = "1"
+async-stream = "0.3"
+rand = "0.8"
+url = "2"

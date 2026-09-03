@@ -31,7 +31,6 @@ clap = { version = "4", features = ["derive", "env"] }
 sha2 = "0.10"
 tar = "0.4"
 flate2 = "1"
-rand = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 # Connection counts on Windows use netstat2 (GetExtendedTcpTable). Linux

@@ -1,0 +1,39 @@
+[package]
+name = "pharus"
+description = "Pharus monitoring server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pharus"
+path = "src/main.rs"
+
+[dependencies]
+pharus-common = { path = "../common" }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
+tower-http = { version = "0.6", features = ["fs"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder", "hostname", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+# ring backend: aws-lc-sys (default) does not build under cargo-zigbuild.
+russh = { version = "0.63", default-features = false, features = ["ring"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+sha2 = "0.10"
+tar = "0.4"
+flate2 = "1"

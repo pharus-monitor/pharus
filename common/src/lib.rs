@@ -185,6 +185,7 @@ pub enum TaskKind {
     Traceroute,
     Mtr,
     Iperf3,
+    Speedtest,
     Script,
 }
 
@@ -303,6 +304,18 @@ pub enum AgentMsg {
         retransmits: Option<u32>,
         #[serde(default)]
         duration_s: Option<f64>,
+    },
+    /// Built-in speedtest result (no external iperf3 server needed).
+    SpeedtestResult {
+        request_id: String,
+        /// "down" | "up"
+        direction: String,
+        /// Throughput in bits per second.
+        throughput_bps: f64,
+        /// Elapsed time in milliseconds.
+        elapsed_ms: u64,
+        /// Total bytes transferred.
+        bytes_transferred: u64,
     },
     /// Agent-side region detection reported once per connection.
     Region { code: String },

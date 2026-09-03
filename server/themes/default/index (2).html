@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="doc.title">Pharus · Server Monitoring</title>
+  <link rel="stylesheet" href="style.css?v=0.7.1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <div class="beacon" aria-hidden="true">
+        <svg viewBox="0 0 48 48" class="beacon-svg">
+          <defs>
+            <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#fbbf24" stop-opacity="0.55"/>
+              <stop offset="1" stop-color="#fbbf24" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g class="beacon-sweep">
+            <path d="M24 9 L46 4 L46 14 Z" fill="url(#beam)"/>
+          </g>
+          <path d="M24 3 L20.5 12 h7 Z" fill="#fbbf24"/>
+          <path d="M19.5 13 h9 L31 44 H17 Z" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M19 22 h10 M18 32 h12" stroke="#fbbf24" stroke-width="1.4" opacity="0.45"/>
+          <circle cx="24" cy="17.5" r="2.2" fill="#fde68a"/>
+        </svg>
+      </div>
+      <div class="brand">
+        <h1>Pharus</h1>
+        <p data-i18n="brand.subtitle">Lighthouse · Lightweight Server Monitoring</p>
+      </div>
+      <div class="header-right">
+        <button id="group-toggle" class="view-toggle" type="button" aria-pressed="false" data-i18n-aria="region.toggle" aria-label="Toggle region grouping">
+          <span data-i18n="region.flat">Flat</span>
+        </button>
+        <button id="theme-btn" class="view-toggle" type="button" data-i18n="theme.auto">auto</button>
+        <a id="admin-link" class="admin-link" href="admin" hidden data-i18n="nav.admin">管理</a>
+        <span id="conn" class="conn-badge conn-down" role="status">
+          <span class="conn-dot"></span>Connecting…
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap main">
+
+    <section class="stats" aria-label="总览">
+      <div class="stat-tile">
+        <p class="stat-label" data-i18n="stats.total">Servers</p>
+        <p class="stat-value" id="stat-total">0</p>
+      </div>
+      <div class="stat-tile">
+        <p class="stat-label" data-i18n="stats.online">Online</p>
+        <p class="stat-value stat-online" id="stat-online">0</p>
+      </div>
+      <div class="stat-tile">
+        <p class="stat-label" data-i18n="stats.offline">Offline</p>
+        <p class="stat-value stat-offline" id="stat-offline">0</p>
+      </div>
+      <div class="stat-tile">
+        <p class="stat-label" data-i18n="stats.expiring">Expiring</p>
+        <p class="stat-value stat-cost" id="stat-expiring">—</p>
+      </div>
+      <div class="stat-tile">
+        <p class="stat-label" data-i18n="stats.monthlyCost">Monthly cost</p>
+        <p class="stat-value stat-cost" id="stat-cost">—</p>
+      </div>
+    </section>
+
+    <section id="grid" class="grid" aria-live="polite"></section>
+
+    <div id="empty" class="empty" hidden>
+      <p class="empty-title" data-i18n="empty.title">No servers yet</p>
+      <p class="empty-hint">
+        <span data-i18n="empty.hintBefore">Run</span>
+        <code>pharus add-agent --name &lt;name&gt;</code>
+        <span data-i18n="empty.hintAfter">to register your first server</span>
+      </p>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/pharus-monitor/pharus" target="_blank" rel="noopener">Pharus</a>
+      <span data-i18n="footer.rights">· 轻量服务器监控</span>
+    </p>
+  </footer>
+
+  <template id="card-tpl">
+    <article class="card is-offline">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-f="name">—</h2>
+          <p data-f="os">—</p>
+          <div class="ip-row">
+            <div class="ip-list">
+              <span class="ip-value" data-f="ips4"></span>
+              <span class="ip-value" data-f="ips6"></span>
+            </div>
+            <button class="eye-btn" data-f="ipsToggle" type="button" hidden data-i18n-aria="host.showIp" aria-label="显示 IP" title="显示 IP">👁</button>
+          </div>
+        </div>
+        <div class="card-badges">
+          <button class="drag-grip" data-f="grip" type="button" title="拖动排序">⠿</button>
+          <span class="region-pill" data-f="region" hidden></span>
+          <span class="status-pill" data-f="status"><span class="dot"></span>Offline</span>
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="gauge" role="img" data-i18n-aria="gauge.aria" aria-label="CPU usage">
+          <svg viewBox="0 0 96 96" class="gauge-svg">
+            <defs>
+              <linearGradient id="cpuGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#f59e0b"/>
+                <stop offset="1" stop-color="#fbbf24"/>
+              </linearGradient>
+            </defs>
+            <circle cx="48" cy="48" r="40" fill="none" stroke-width="7" class="gauge-track"/>
+            <circle cx="48" cy="48" r="40" fill="none" stroke="url(#cpuGrad)" stroke-width="7"
+                    stroke-linecap="round" class="gauge-arc" data-f="cpuArc"
+                    stroke-dasharray="251.33" stroke-dashoffset="251.33"/>
+          </svg>
+          <div class="gauge-center">
+            <span class="gauge-value" data-f="cpuVal">—</span>
+            <span class="gauge-label" data-i18n="gauge.cpu">CPU</span>
+          </div>
+        </div>
+
+        <div class="meters">
+          <div class="meter">
+            <div class="meter-head">
+              <span class="meter-label" data-i18n="meter.mem">Memory</span>
+              <span class="meter-value" data-f="memVal">—</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill mem" data-f="memFill"></div></div>
+          </div>
+          <div class="meter">
+            <div class="meter-head">
+              <span class="meter-label" data-i18n="meter.swap">Swap</span>
+              <span class="meter-value" data-f="swapVal">—</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill swap" data-f="swapFill"></div></div>
+          </div>
+          <div class="meter">
+            <div class="meter-head">
+              <span class="meter-label" data-i18n="meter.disk">Disk</span>
+              <span class="meter-value" data-f="diskVal">—</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill disk" data-f="diskFill"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="kv-grid">
+        <div class="kv">
+          <span class="k">
+            <svg viewBox="0 0 16 16" class="ico ico-down"><path d="M8 12.5 2.5 7h3V2h5v5h3z" fill="currentColor"/></svg>
+            <span data-i18n="kv.download">Download</span>
+          </span>
+          <span class="v" data-f="rx">—</span>
+        </div>
+        <div class="kv">
+          <span class="k">
+            <svg viewBox="0 0 16 16" class="ico ico-up"><path d="M8 3.5 13.5 9h-3v5h-5V9h-3z" fill="currentColor"/></svg>
+            <span data-i18n="kv.upload">Upload</span>
+          </span>
+          <span class="v" data-f="tx">—</span>
+        </div>
+        <div class="kv"><span class="k" data-i18n="kv.load">Load</span><span class="v" data-f="load">—</span></div>
+        <div class="kv"><span class="k" data-i18n="kv.uptime">Uptime</span><span class="v" data-f="uptime">—</span></div>
+      </div>
+
+      <div class="billing" data-f="billing" hidden>
+        <div class="divider"></div>
+        <div class="meter">
+          <div class="meter-head">
+            <span class="meter-label" data-i18n="billing.traffic">Cycle traffic</span>
+            <span class="meter-value" data-f="trafficVal">—</span>
+          </div>
+          <div class="meter-track"><div class="meter-fill traffic" data-f="trafficFill"></div></div>
+        </div>
+        <div class="kv-grid billing-kv">
+          <div class="kv"><span class="k" data-i18n="billing.expires">Expires</span><span class="v" data-f="expires">—</span></div>
+          <div class="kv"><span class="k" data-i18n="billing.price">Price</span><span class="v" data-f="price">—</span></div>
+          <div class="kv"><span class="k" data-i18n="billing.resetDay">Reset day</span><span class="v" data-f="resetDay">—</span></div>
+          <div class="kv"><span class="k" data-i18n="billing.bandwidth">带宽</span><span class="v" data-f="bandwidth">—</span></div>
+        </div>
+      </div>
+
+      <div data-f="pingSection" hidden>
+        <div class="divider"></div>
+        <div class="mini-head"><span data-i18n="ping.current">当前延迟</span></div>
+        <div class="result-chips" data-f="pings"></div>
+      </div>
+
+      <div data-f="unlockSection" hidden>
+        <div class="divider"></div>
+        <div class="mini-head"><span data-i18n="streaming.current">流媒体状态</span></div>
+        <div class="result-chips" data-f="unlock"></div>
+      </div>
+    </article>
+  </template>
+
+  <script src="common.js?v=0.7.1"></script>
+  <script src="index.js?v=0.7.1"></script>
+</body>
+</html>

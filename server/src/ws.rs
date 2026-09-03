@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-const AGENT_OFFLINE_TIMEOUT: Duration = Duration::from_secs(15);
+const AGENT_OFFLINE_TIMEOUT: Duration = Duration::from_secs(60);
 const AGENT_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
@@ -167,7 +167,12 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
             next = tokio::time::timeout(AGENT_OFFLINE_TIMEOUT, read.next()) => {
                 let msg = match next {
                     Ok(Some(Ok(Message::Text(t)))) => t,
-                    Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
+                    Ok(Some(Ok(Message::Ping(d)))) => {
+                        let _ = write.send(Message::Pong(d)).await;
+                        continue;
+                    }
+                    Ok(Some(Ok(Message::Pong(_)))) => continue,
+                    Ok(Some(Ok(Message::Close(_)))) => break,
                     Ok(Some(Ok(_))) => continue,
                     Ok(Some(Err(e))) => {
                         warn!(agent_id, error = %e, "agent ws error");
@@ -350,6 +355,23 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                             duration_s,
                         );
                     }
+                    Ok(AgentMsg::SpeedtestResult {
+                        request_id,
+                        direction,
+                        throughput_bps,
+                        elapsed_ms,
+                        bytes_transferred,
+                    }) => {
+                        crate::diag::relay_speedtest(
+                            &state,
+                            agent_id,
+                            request_id,
+                            direction,
+                            throughput_bps,
+                            elapsed_ms,
+                            bytes_transferred,
+                        );
+                    }
                     Ok(AgentMsg::Auth { .. }) => {
                         warn!(agent_id, "unexpected re-auth, dropping");
                         break;
@@ -398,6 +420,7 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                     Some(m) => {
                         let Ok(s) = serde_json::to_string(&m) else { continue };
                         if write.send(Message::Text(s)).await.is_err() {
+                            warn!(agent_id, epoch, "failed to send downlink message");
                             break;
                         }
                     }

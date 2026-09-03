@@ -8,8 +8,8 @@ use crate::features;
 use crate::regions;
 use crate::state::SharedState;
 use pharus_common::{BrowserMsg, MtrHop, ServerToAgentMsg, TaskKind};
-use std::time::{Duration, Instant};
-use tracing::warn;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tracing::{info, warn};
 
 /// A request whose output frames have not finished arriving yet.
 #[derive(Debug, Clone)]
@@ -48,7 +48,10 @@ pub enum DiagError {
 }
 
 fn now() -> i64 {
-    crate::state::now()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn setting_usize(state: &SharedState, key: &str, default: usize) -> usize {
@@ -181,6 +184,13 @@ fn dispatch(
         state.diag_pending.lock().unwrap().remove(&request_id);
         return Err(DiagError::AgentOffline);
     }
+    info!(
+        request_id = %request_id,
+        agent_id,
+        kind = %kind,
+        target = %target,
+        "diag dispatched"
+    );
     Ok(request_id)
 }
 
@@ -529,56 +539,6 @@ pub fn cancel_for_agent(state: &SharedState, agent_id: i64) {
             exit_code: Some(-1),
         });
     }
-}
-
-/// Start a built-in speedtest (no external iperf3 server needed).
-/// The `target` is unused (speedtest connects to the Pharus server itself),
-/// but we keep the dispatch signature consistent.
-pub fn start_speedtest(
-    state: &SharedState,
-    ip: &str,
-    agent_id: i64,
-    size: u64,
-    direction: &str,
-) -> Result<String, DiagError> {
-    let extra = serde_json::json!({
-        "size": size,
-        "direction": direction,
-    });
-    // Speedtest uses the Pharus server itself as the target, so we pass an
-    // empty target that passes valid_target (a bare hostname is fine).
-    dispatch(state, ip, agent_id, "speedtest", "speedtest", TaskKind::Speedtest, "-", None, Some(extra))
-}
-
-/// Relay the final structured speedtest result to the requesting browser.
-pub fn relay_speedtest(
-    state: &SharedState,
-    agent_id: i64,
-    request_id: String,
-    direction: String,
-    throughput_bps: f64,
-    elapsed_ms: u64,
-    bytes_transferred: u64,
-) {
-    if take_pending(state, &request_id, agent_id, true).is_none() {
-        return;
-    }
-    let result = serde_json::json!({
-        "direction": direction,
-        "throughput_bps": throughput_bps,
-        "elapsed_ms": elapsed_ms,
-        "bytes_transferred": bytes_transferred,
-    });
-    state.broadcast(BrowserMsg::DiagResult {
-        request_id,
-        agent_id,
-        kind: "speedtest".into(),
-        stream: None,
-        data: None,
-        result: Some(result),
-        done: true,
-        exit_code: Some(0),
-    });
 }
 
 #[cfg(test)]

@@ -42,17 +42,12 @@
   var diagIperfBtn = document.getElementById('diag-iperf-btn');
   var diagTabLg = document.getElementById('diag-tab-lg');
   var diagTabIperf = document.getElementById('diag-tab-iperf');
-  var diagTabSpeedtest = document.getElementById('diag-tab-speedtest');
   var diagLgGroup = document.getElementById('diag-lg-group');
   var diagIperfGroup = document.getElementById('diag-iperf-group');
-  var diagSpeedtestGroup = document.getElementById('diag-speedtest-group');
-  var diagSpeedtestBtn = document.getElementById('diag-speedtest-btn');
-  var diagSpeedtestSize = document.getElementById('diag-speedtest-size');
-  var diagSpeedtestDir = document.getElementById('diag-speedtest-dir');
   var diagError = document.getElementById('diag-error');
   var diagSessions = document.getElementById('diag-sessions');
   var diagEmpty = document.getElementById('diag-empty');
-  var termBtn = document.getElementById('term-btn');
+  var termBtn = null; // legacy: the SSH button now lives in the host title row
   var termModal = document.getElementById('term-modal');
   var termOut = document.getElementById('term-out');
   var termInput = document.getElementById('term-input');
@@ -161,6 +156,13 @@
       card.ipsShown = !card.ipsShown;
       renderIps();
     });
+    card.sshBtn = node.querySelector('[data-f="sshBtn"]');
+    if (card.sshBtn) {
+      card.sshBtn.addEventListener('click', function () {
+        if (!adminOn) return;
+        openTerminal();
+      });
+    }
     card.renameBtn = node.querySelector('#rename-btn');
     card.editBtn.addEventListener('click', function () { openEdit(hostId); });
     card.renameBtn.addEventListener('click', function () {
@@ -227,16 +229,23 @@
   }
 
   function renderDocker() {
-    dockerPanel.hidden = !entry.info;
     dockerWrap.innerHTML = '';
-    if (!entry.info) return;
-    var list = entry.containers || [];
-    if (!list.length) {
-      dockerPanel.hidden = true;
-      dockerMessage.textContent = t('docker.empty');
-      dockerMessage.hidden = true;
+    // Hidden until the agent reports a reachable Docker daemon; admins see a
+    // hint instead of nothing, so the feature is discoverable.
+    if (!entry.docker_available) {
+      dockerPanel.hidden = !adminOn;
+      dockerMessage.textContent = t('docker.unavailable');
+      dockerMessage.hidden = !adminOn;
       return;
     }
+    dockerPanel.hidden = false;
+    var list = entry.containers || [];
+    if (!list.length) {
+      dockerMessage.textContent = t('docker.empty');
+      dockerMessage.hidden = false;
+      return;
+    }
+    dockerMessage.hidden = true;
     var wrap = document.createElement('div');
     wrap.className = 'admin-table-wrap';
     var table = document.createElement('table');
@@ -1010,12 +1019,11 @@
 
   /* ---------- diagnostics ---------- */
   function showDiagTab(which) {
-    diagTabLg.classList.toggle('active', which === 'lg');
-    diagTabIperf.classList.toggle('active', which === 'iperf');
-    diagTabSpeedtest.classList.toggle('active', which === 'speedtest');
-    diagLgGroup.hidden = which !== 'lg';
-    diagIperfGroup.hidden = which !== 'iperf';
-    diagSpeedtestGroup.hidden = which !== 'speedtest';
+    var lg = which === 'lg';
+    diagTabLg.classList.toggle('active', lg);
+    diagTabIperf.classList.toggle('active', !lg);
+    diagLgGroup.hidden = !lg;
+    diagIperfGroup.hidden = lg;
   }
 
   function updateDiagGate() {
@@ -1023,7 +1031,6 @@
     var lg = !!entry && P.hasFeature(entry, 'lg');
     var mtr = !!entry && P.hasFeature(entry, 'mtr');
     var iperf3 = !!entry && P.hasFeature(entry, 'iperf3');
-    var speedtest = !!entry && P.hasFeature(entry, 'speedtest');
     diagPing.hidden = !lg;
     diagTraceroute.hidden = !lg;
     diagMtr.hidden = !mtr;
@@ -1031,16 +1038,13 @@
     diagTraceroute.disabled = !online;
     diagMtr.disabled = !online;
     diagTabIperf.hidden = !iperf3;
-    diagTabSpeedtest.hidden = !speedtest;
     if (!iperf3 && !diagIperfGroup.hidden) showDiagTab('lg');
-    if (!speedtest && !diagSpeedtestGroup.hidden) showDiagTab('lg');
     diagIperfBtn.disabled = !online;
-    diagSpeedtestBtn.disabled = !online;
     document.querySelector('.cycles-field').hidden = !mtr;
     if (entry && !online) {
       diagError.textContent = t('diag.offline');
       diagError.hidden = false;
-    } else if (entry && !lg && !mtr && !iperf3 && !speedtest) {
+    } else if (entry && !lg && !mtr && !iperf3) {
       diagError.textContent = t('feature.disabled').replace('{feature}', t('feature.diagnostics'));
       diagError.hidden = false;
     } else {
@@ -1110,8 +1114,6 @@
         renderMtrTable(request, message.result);
       } else if (message.kind === 'iperf3' && typeof message.result === 'object') {
         renderIperf3Result(request, message.result);
-      } else if (message.kind === 'speedtest' && typeof message.result === 'object') {
-        renderSpeedtestResult(request, message.result);
       } else {
         appendDiagnosticPart(request, JSON.stringify(message.result, null, 2) + '\n', 'structured');
       }
@@ -1126,13 +1128,6 @@
     return mbps >= 1000 ? (mbps / 1000).toFixed(2) + ' Gbps' : mbps.toFixed(1) + ' Mbps';
   }
 
-  function formatBytes(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    return (bytes / 1073741824).toFixed(2) + ' GB';
-  }
-
   /* Renders the structured iperf3 summary into the diagnostic session. */
   function renderIperf3Result(request, result) {
     var lines = [];
@@ -1140,16 +1135,6 @@
     if (result.throughput_bps != null) lines.push(t('diag.throughput') + ': ' + iperfMbps(result.throughput_bps));
     if (result.retransmits != null) lines.push(t('diag.retransmits') + ': ' + result.retransmits);
     if (result.duration_s != null) lines.push(t('diag.duration') + ': ' + Number(result.duration_s).toFixed(1) + ' s');
-    appendDiagnosticPart(request, lines.join('\n') + '\n', 'structured');
-  }
-
-  /* Renders the structured speedtest summary into the diagnostic session. */
-  function renderSpeedtestResult(request, result) {
-    var lines = [];
-    lines.push(t('diag.speedtest') + ' · ' + (result.direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
-    if (result.throughput_bps != null) lines.push(t('diag.speed') + ': ' + iperfMbps(result.throughput_bps));
-    if (result.elapsed_ms != null) lines.push(t('diag.duration') + ': ' + (result.elapsed_ms / 1000).toFixed(1) + ' s');
-    if (result.bytes_transferred != null) lines.push(t('diag.transferred') + ': ' + formatBytes(result.bytes_transferred));
     appendDiagnosticPart(request, lines.join('\n') + '\n', 'structured');
   }
 
@@ -1298,34 +1283,6 @@
     });
   }
 
-  function runSpeedtest() {
-    diagError.hidden = true;
-    if (!entry || !entry.online) {
-      diagError.textContent = t('diag.offline');
-      diagError.hidden = false;
-      return;
-    }
-    if (!P.hasFeature(entry, 'speedtest')) {
-      diagError.textContent = t('feature.disabled').replace('{feature}', t('diag.speedtest'));
-      diagError.hidden = false;
-      return;
-    }
-    var size = parseInt(diagSpeedtestSize.value, 10) || 10485760;
-    var direction = diagSpeedtestDir.value;
-    var body = { agent_id: hostId, size: size, direction: direction };
-    P.requestJson('/api/diag/speedtest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }).then(function (response) {
-      if (!response.request_id) throw new Error(t('diag.missingRequestId'));
-      createDiagnosticSession(response.request_id, hostId, 'speedtest', t('diag.speedtest') + ' · ' + (direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
-    }).catch(function (error) {
-      diagError.textContent = t('common.error') + ': ' + (error && error.message ? error.message : error);
-      diagError.hidden = false;
-    });
-  }
-
   /* ---------- streaming service results ---------- */
   function updateStreamingGate() {
     var enabled = !!entry && P.hasFeature(entry, 'streaming');
@@ -1393,6 +1350,7 @@
       online: a.online,
       data: a.data,
       containers: Array.isArray(a.containers) ? a.containers : [],
+      docker_available: !!a.docker_available,
       name: a.name,
       info: a.info,
       billing: a.billing || null,
@@ -1455,6 +1413,7 @@
     } else if (msg.type === 'containers' && msg.agent_id === hostId) {
       if (!entry) entry = { agent_id: hostId };
       entry.containers = Array.isArray(msg.containers) ? msg.containers : [];
+      if (msg.available) entry.docker_available = true;
       renderAll();
     } else if (msg.type === 'diag_result') {
       handleDiagnosticFrame(msg);
@@ -1491,7 +1450,7 @@
     adminOn = on;
     editModeBtn.classList.toggle('active', on);
     addTaskBtn.hidden = !on;
-    termBtn.hidden = !on;
+    if (card && card.sshBtn) card.sshBtn.hidden = !on;
     if (card) card.renameBtn.hidden = !on;
     if (card) renderBilling();
     if (card) renderIps();
@@ -1650,10 +1609,8 @@
   diagTraceroute.addEventListener('click', function () { runDiagnostic('traceroute'); });
   diagMtr.addEventListener('click', function () { runDiagnostic('mtr'); });
   diagIperfBtn.addEventListener('click', runIperf3);
-  diagSpeedtestBtn.addEventListener('click', runSpeedtest);
   diagTabLg.addEventListener('click', function () { showDiagTab('lg'); });
   diagTabIperf.addEventListener('click', function () { showDiagTab('iperf'); });
-  diagTabSpeedtest.addEventListener('click', function () { showDiagTab('speedtest'); });
   editModeBtn.addEventListener('click', function () {
     if (adminOn) {
       setAdmin(false);
@@ -1826,8 +1783,13 @@
   });
 
   /* ---------- boot ---------- */
-  /* ---------- terminal ---------- */
+  /* ---------- SSH terminal ---------- */
   var termWs = null;
+  var termLogin = document.getElementById('term-login');
+  var termUser = document.getElementById('term-user');
+  var termPass = document.getElementById('term-pass');
+  var termSave = document.getElementById('term-save');
+  var termLoginErr = document.getElementById('term-login-err');
 
   function termAppend(text) {
     termOut.textContent += text;
@@ -1836,27 +1798,34 @@
 
   function closeTerminal() {
     if (termWs) {
-      try { termWs.send(JSON.stringify({ type: 'close' })); } catch (e) {}
       try { termWs.close(); } catch (e) {}
     }
     termWs = null;
     termModal.hidden = true;
     termErr.hidden = true;
+    termLoginErr.hidden = true;
   }
 
-  function openTerminal() {
-    termOut.textContent = '';
+  function connectTerminal(user, password, save) {
+    termLogin.hidden = true;
+    termOut.hidden = false;
+    termOut.textContent = t('ssh.connecting') + '\n';
     termInput.value = '';
     termInput.disabled = true;
     termErr.hidden = true;
-    termModal.hidden = false;
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     var ws = new WebSocket(proto + '//' + location.host + '/ws/term');
     termWs = ws;
     ws.onopen = function () {
-      ws.send(JSON.stringify({ type: 'open', agent_id: hostId, cols: 80, rows: 24 }));
-      termInput.disabled = false;
-      termInput.focus();
+      ws.send(JSON.stringify({
+        type: 'open',
+        agent_id: hostId,
+        cols: 80,
+        rows: 24,
+        user: user || null,
+        password: password || null,
+        save: !!save
+      }));
     };
     ws.onmessage = function (ev) {
       termAppend(String(ev.data));
@@ -1872,10 +1841,45 @@
     };
   }
 
-  termBtn.addEventListener('click', function () {
-    if (!adminOn) return;
-    openTerminal();
+  function openTerminal() {
+    termModal.hidden = false;
+    termOut.textContent = '';
+    termLoginErr.hidden = true;
+    // Probe stored credentials: configured hosts connect straight away.
+    fetch('/api/admin/agents/' + hostId + '/ssh', { method: 'GET' })
+      .then(function (r) { return r.ok ? r.json() : { configured: false }; })
+      .then(function (info) {
+        if (termModal.hidden) return; // closed meanwhile
+        if (info && info.configured) {
+          connectTerminal(null, null, false);
+        } else {
+          termOut.hidden = true;
+          termLogin.hidden = false;
+          termUser.focus();
+        }
+      })
+      .catch(function () {
+        termOut.hidden = true;
+        termLogin.hidden = false;
+        termUser.focus();
+      });
+  }
+
+  document.getElementById('term-login-ok').addEventListener('click', function () {
+    var u = termUser.value.trim();
+    var p = termPass.value;
+    if (!u || !p) {
+      termLoginErr.textContent = t('ssh.needCreds');
+      termLoginErr.hidden = false;
+      return;
+    }
+    connectTerminal(u, p, termSave.checked);
   });
+  termPass.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') document.getElementById('term-login-ok').click();
+  });
+  document.getElementById('term-login-cancel').addEventListener('click', closeTerminal);
+
   termInput.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter') {
       ev.preventDefault();

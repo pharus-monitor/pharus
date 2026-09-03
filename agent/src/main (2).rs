@@ -28,7 +28,13 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `os-arch` platform string, e.g. "linux-x86_64" / "windows-x86_64", used by
 /// the server to pick the right update asset.
 fn platform_string() -> String {
-    pharus_common::platform_string()
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        "x86" => "i686",
+        other => other,
+    };
+    format!("{}-{arch}", std::env::consts::OS)
 }
 
 #[derive(Parser, Debug)]
@@ -1260,17 +1266,6 @@ where
     })
 }
 
-/// Create a CmdOutput message for a finished diagnostic.
-fn cmd_output_finish(request_id: &str, data: String, exit_code: i32) -> AgentMsg {
-    AgentMsg::CmdOutput {
-        request_id: request_id.to_string(),
-        stream: "stderr".into(),
-        data,
-        done: true,
-        exit_code: Some(exit_code),
-    }
-}
-
 /// Runs a browser-initiated diagnostic, streaming output back as it arrives.
 /// MTR is reported as one structured result instead, since its report is only
 /// meaningful once complete.
@@ -1281,9 +1276,14 @@ async fn stream_task(
     target: String,
     cycles: Option<u32>,
     extra: Option<serde_json::Value>,
-    server_url: String,
 ) {
-    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
+    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
+        request_id: request_id.clone(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    };
 
     if kind == TaskKind::Mtr {
         stream_mtr(msg_tx, request_id, &target, cycles).await;
@@ -1291,10 +1291,6 @@ async fn stream_task(
     }
     if kind == TaskKind::Iperf3 {
         stream_iperf3(msg_tx, request_id, &target, extra).await;
-        return;
-    }
-    if kind == TaskKind::Speedtest {
-        stream_speedtest(msg_tx, request_id, extra, &server_url).await;
         return;
     }
 
@@ -1340,7 +1336,13 @@ async fn stream_iperf3(
     target: &str,
     extra: Option<serde_json::Value>,
 ) {
-    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
+    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
+        request_id: request_id.clone(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    };
     let port = extra
         .as_ref()
         .and_then(|e| e.get("port"))
@@ -1470,134 +1472,19 @@ fn parse_iperf3_json(text: &str, direction: &str) -> (Option<f64>, Option<u32>, 
     (bps, retrans, secs)
 }
 
-/// Runs a built-in speedtest against the Pharus server (no external iperf3
-/// server needed). The server URL is derived from the WebSocket connection.
-async fn stream_speedtest(
-    msg_tx: MsgTx,
-    request_id: String,
-    extra: Option<serde_json::Value>,
-    ws_url: &str,
-) {
-    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
-
-    let size = extra
-        .as_ref()
-        .and_then(|e| e.get("size"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10_485_760)
-        .clamp(1_048_576, 104_857_600);
-    let direction = extra
-        .as_ref()
-        .and_then(|e| e.get("direction"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("down")
-        .to_string();
-
-    // Derive the Pharus server HTTP URL from the WebSocket URL.
-    // wss://example.com/ws/agent -> https://example.com
-    // ws://example.com/ws/agent -> http://example.com
-    let server_url = if ws_url.starts_with("wss://") {
-        ws_url.strip_prefix("wss://").and_then(|s| s.split('/').next()).map(|host| format!("https://{host}"))
-    } else if ws_url.starts_with("ws://") {
-        ws_url.strip_prefix("ws://").and_then(|s| s.split('/').next()).map(|host| format!("http://{host}"))
-    } else {
-        None
-    };
-    let Some(server_url) = server_url else {
-        let _ = msg_tx.send(finish("cannot derive server URL from WebSocket URL".into(), -1));
-        return;
-    };
-    else {
-        let _ = msg_tx.send(finish("missing server_url for speedtest".into(), -1));
-        return;
-    };
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .unwrap_or_default();
-
-    if direction == "down" {
-        // Download test: stream data from server
-        let url = format!("{}/api/speedtest/download?size={}", server_url, size);
-        let start = Instant::now();
-        let resp = match client.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = msg_tx.send(finish(format!("speedtest download request failed: {e}"), -1));
-                return;
-            }
-        };
-        if !resp.status().is_success() {
-            let _ = msg_tx.send(finish(format!("speedtest download failed: HTTP {}", resp.status()), -1));
-            return;
-        }
-        let mut bytes_received: u64 = 0;
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                Ok(data) => bytes_received += data.len() as u64,
-                Err(e) => {
-                    let _ = msg_tx.send(finish(format!("speedtest download stream error: {e}"), -1));
-                    return;
-                }
-            }
-        }
-        let elapsed = start.elapsed();
-        let elapsed_ms = elapsed.as_millis() as u64;
-        let throughput_bps = if elapsed_ms > 0 {
-            (bytes_received as f64 * 8.0) / (elapsed_ms as f64 / 1000.0)
-        } else {
-            0.0
-        };
-        let _ = msg_tx.send(AgentMsg::SpeedtestResult {
-            request_id,
-            direction,
-            throughput_bps,
-            elapsed_ms,
-            bytes_transferred: bytes_received,
-        });
-    } else {
-        // Upload test: send data to server
-        let url = format!("{}/api/speedtest/upload", server_url);
-        let data: Vec<u8> = (0..size as usize).map(|_| rand::random::<u8>()).collect();
-        let start = Instant::now();
-        let resp = match client.post(&url).body(data.clone()).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = msg_tx.send(finish(format!("speedtest upload request failed: {e}"), -1));
-                return;
-            }
-        };
-        if !resp.status().is_success() {
-            let _ = msg_tx.send(finish(format!("speedtest upload failed: HTTP {}", resp.status()), -1));
-            return;
-        }
-        let elapsed = start.elapsed();
-        let elapsed_ms = elapsed.as_millis() as u64;
-        let bytes_sent = data.len() as u64;
-        let throughput_bps = if elapsed_ms > 0 {
-            (bytes_sent as f64 * 8.0) / (elapsed_ms as f64 / 1000.0)
-        } else {
-            0.0
-        };
-        let _ = msg_tx.send(AgentMsg::SpeedtestResult {
-            request_id,
-            direction,
-            throughput_bps,
-            elapsed_ms,
-            bytes_transferred: bytes_sent,
-        });
-    }
-}
-
 /// Streams a live MTR table: parses `mtr --raw` lines as they arrive and sends
 /// progressive snapshots (done=false, throttled) plus one terminal snapshot.
 /// The run ends as soon as the *target* hop has been probed `cycles` times —
 /// mtr's own -c counts discovery rounds, so a slowly-discovered target would
 /// otherwise see far fewer probes than requested.
 async fn stream_mtr(msg_tx: MsgTx, request_id: String, target: &str, cycles: Option<u32>) {
-    let finish = |data: String, exit_code: i32| cmd_output_finish(&request_id, data, exit_code);
+    let finish = |data: String, exit_code: i32| AgentMsg::CmdOutput {
+        request_id: request_id.clone(),
+        stream: "stderr".into(),
+        data,
+        done: true,
+        exit_code: Some(exit_code),
+    };
     let wanted = cycles.unwrap_or(10).clamp(1, 30);
     // Resolve now so the target hop can be recognized by its h-line address.
     let target_ips: Vec<std::net::IpAddr> = match target.parse() {
@@ -1736,7 +1623,14 @@ fn update_status(msg_tx: &MsgTx, request_id: &str, phase: &str, done: bool, erro
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    pharus_common::sha256_hex(data)
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 async fn download_asset(url: &str) -> Result<Vec<u8>> {
@@ -1929,6 +1823,7 @@ async fn collect_containers(
         .await
     {
         Ok(l) => l,
+        // Unreachable daemon: report unavailable so the panel hides.
         Err(_) => return None,
     };
     let now = Instant::now();
@@ -1988,8 +1883,9 @@ async fn collect_containers(
     Some(out)
 }
 
-/// Report Docker containers every ~15s. Exits silently when the host has no
-/// Docker daemon reachable (nothing to monitor).
+/// Report Docker containers every ~15s. Reports `available=false` when the
+/// daemon can't be reached (host has no Docker) and keeps polling — the panel
+/// appears once Docker shows up.
 async fn docker_loop(msg_tx: MsgTx) {
     sleep(Duration::from_secs(5)).await;
     let docker = match bollard::Docker::connect_with_local_defaults() {
@@ -2001,11 +1897,23 @@ async fn docker_loop(msg_tx: MsgTx) {
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
-        let Some(containers) = collect_containers(&docker, &mut prev).await else {
-            continue;
-        };
-        if msg_tx.send(AgentMsg::Containers { containers }).is_err() {
-            return;
+        match collect_containers(&docker, &mut prev).await {
+            Some(containers) => {
+                if msg_tx
+                    .send(AgentMsg::Containers { containers, available: true })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            None => {
+                if msg_tx
+                    .send(AgentMsg::Containers { containers: Vec::new(), available: false })
+                    .is_err()
+                {
+                    return;
+                }
+            }
         }
     }
 }
@@ -2061,7 +1969,6 @@ async fn run_session(cfg: &Config) -> Result<()> {
     let reader = {
         let msg_tx = msg_tx.clone();
         let shared = shared.clone();
-        let server_url = cfg.server.clone();
         tokio::spawn(async move {
             while let Some(frame) = read.next().await {
                 match frame {
@@ -2158,7 +2065,6 @@ async fn run_session(cfg: &Config) -> Result<()> {
                                 target,
                                 cycles,
                                 extra,
-                                server_url.clone(),
                             ));
                         }
                         _ => {}

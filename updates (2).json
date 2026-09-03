@@ -1,0 +1,250 @@
+{
+  "versions": [
+    {
+      "version": "0.6.1",
+      "notes": {
+        "zh-CN": "1. 自定义下拉组件：所有下拉框改为统一样式的自定义组件，支持深浅主题、键盘导航、禁用态、宽度按最长选项自适应\n2. 指标历史面板：CPU / 内存 / 磁盘读写 / 带宽拆分为 2×2 迷你图表，时间范围下拉移至面板标题栏\n3. 磁盘读写速率：agent 上报、服务端存储磁盘读写速率，并显示在历史图表\n4. 无 .html 地址栏：/host、/admin 不再需要 .html 后缀，首页为 /\n5. 受信任反代：同机反向代理的转发头被信任，正确记录真实客户端 IP\n6. 流媒体检测记录：后台新增菜单，跨主机查看最近检测结果\n7. Agent Token 查看：主机列表可直接查看 / 重新签发 agent 通信 token",
+        "en": "1. Custom dropdown component: every select is now a theme-styled dropdown with keyboard navigation, disabled states and width that fits the longest option\n2. Metrics panel: CPU / memory / disk read+write / bandwidth split into a 2×2 mini-chart grid; the time-range control moved into the panel header\n3. Disk read/write rates: agent reports and server stores disk throughput, shown in the history charts\n4. Clean URLs: /host and /admin no longer need a .html suffix; the homepage stays /\n5. Trusted reverse proxy: same-host reverse-proxy forwarding headers are trusted so the real client IP is recorded\n6. Streaming detection log: an admin menu for recent detection results across all hosts\n7. Agent tokens: view and re-issue agent communication tokens from the host list",
+        "ja": "1. カスタムドロップダウン：すべての select をテーマ対応のカスタムコンポーネントに置き換え（キーボード操作、無効状態、最長オプションに合わせた幅）\n2. メトリクスパネル：CPU / メモリ / ディスク読み書き / 帯域を 2×2 のミニチャートに分割、時間範囲はパネルヘッダーへ移動\n3. ディスク読み書きレート：agent が報告しサーバーが保存、履歴グラフに表示\n4. クリーン URL：/host・/admin は .html 拡張子不要、ホームは /\n5. 信頼済みリバースプロキシ：同一ホストのリバースプロキシの転送ヘッダーを信頼し実クライアント IP を記録\n6. ストリーミング検出ログ：管理メニューに全ホストの最近の検出結果\n7. Agent トークン：ホスト一覧で agent 通信トークンの表示・再発行",
+        "ru": "1. Кастомные дропдауны: все select заменены на компонент в стиле темы (клавиатура, отключённое состояние, ширина по самому длинному варианту)\n2. Панель метрик: CPU / память / чтение-запись диска / трафик разбиты на сетку 2×2; селектор времени — в заголовке панели\n3. Скорость чтения/записи диска: агент сообщает, сервер хранит, показывается на графиках истории\n4. Чистые URL: /host и /admin без расширения .html, главная — /\n5. Доверенный reverse-proxy: заголовки прокси на том же хосте доверяются, записывается реальный IP клиента\n6. Журнал стриминга: меню админки с последними результатами проверок по всем хостам\n7. Токены агента: просмотр и перевыпуск токенов связи в списке хостов"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-linux-x86_64.tar.gz",
+          "sha256": "02dc23c65cf7f99ce8d47159858b9f3b6f00891648929b0e7118783a306bd9e2"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-linux-aarch64.tar.gz",
+          "sha256": "a1c9654027265c34b02af0d684829e922e309314bc1c9d8ced77005edde2ffe8"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-linux-i686.tar.gz",
+          "sha256": "b0535b6001e0b5ab0d4c6c7f65c88646117c09c1602cf3182d682c69e39b3e98"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "b87511cb879af75e3b3f1232c34774a83126603d0464acaee4072c43294599ed"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "340e23e85ad4d731235d4ce12c1870f5541ad6a1f8baf6642407e5d9d39a3d49"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-linux-i686.tar.gz",
+          "sha256": "a4d27f746e17623a098ef2a21df2230c13c0cee6828ac099f96d8d9b15898db2"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.1/pharus-agent-windows-x86_64.exe",
+          "sha256": "f2e5db47e0e154a3cd676770894b376739ceaf7cae80071add9ed4ca179217d7"
+        }
+      }
+    },
+    {
+      "version": "0.6.2",
+      "notes": {
+        "zh-CN": "1. 服务器（面板）在线更新：pharus 服务器自身可在线升级——下载、校验、解包发布包，替换二进制 + themes 并重启（Linux 可用；Windows 提示无服务器安装包）\n2. 在线更新控制台：管理后台「在线更新」页显示面板版本 + 「检查更新」按钮与自动检查提示；每台主机有更新按钮，点击弹出版本选择窗口\n3. 选择版本显示更新说明：选中版本后展示该版本的发布说明，按站点默认语言显示（中文 / English / 日本語 / Русский，带回退）\n4. 可配置清单镜像：更新清单地址成为站点设置项（默认 GitHub raw 源）",
+        "en": "1. Server (panel) online updates: the Pharus server can update itself online — download, verify and unpack the release bundle, swap binary + themes and restart (Linux; Windows reports no server asset)\n2. Online-update console: the admin page shows the panel version with a \"Check for updates\" button and auto-check hint, plus per-host update buttons that open a version-selection modal\n3. Release notes in the picker: selecting a version shows its notes in the site's default language (English / 中文 / 日本語 / Русский, with fallbacks)\n4. Configurable manifest mirror: the update manifest URL is now a site setting (defaults to the GitHub raw source)",
+        "ja": "1. サーバー（パネル）オンライン更新：pharus サーバー自身をオンラインで更新（ダウンロード・検証・解凍、バイナリ＋themes を置換して再起動。Linux 対応、Windows はサーバー向けアセットなし）\n2. オンライン更新コンソール：管理画面でパネルバージョン＋「更新を確認」ボタンと自動チェック、ホストごとの更新ボタンでバージョン選択モーダル\n3. バージョン選択時のリリースノート：サイトの既定言語で表示（日本語 / English / 中文 / Русский、フォールバック付き）\n4. マニフェストミラー設定：更新マニフェスト URL がサイト設定に",
+        "ru": "1. Онлайн-обновление сервера (панели): pharus может обновлять себя сам — скачивание, проверка, распаковка, замена бинарника + themes и перезапуск (Linux; на Windows нет серверного ассета)\n2. Консоль обновлений: страница показывает версию панели, кнопку «Проверить обновления», авто-проверку и кнопки обновления хостов с модальным выбором версии\n3. Примечания к релизу при выборе версии: показываются на языке сайта (Русский / English / 中文 / 日本語, с фолбэком)\n4. Настройка зеркала манифеста: URL манифеста — настройка сайта"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-linux-x86_64.tar.gz",
+          "sha256": "388f77d607983e2fbc8baecd653a46766f8038bf98fa42f634e18156f363a163"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-linux-aarch64.tar.gz",
+          "sha256": "5e6f98098b1fafb6f76bc98c8bd97f516c1e5c49eeec4aa32ba30f0d33740505"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-linux-i686.tar.gz",
+          "sha256": "b080afd01bb26ca0889604d5b951044ab4d31fd13a4f38ba5168e9516ff121bb"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "510426e773295f212b845dd1225a73c1b001377c1a91544bae2c18617b8748c8"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "52ecde213c5ab9d5ff8f89d4273d94a11ea04fc59538a3a6f19ef6575bed8242"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-linux-i686.tar.gz",
+          "sha256": "6681ec8c95fc9ca2dfacf6d638875b72a272e67018ff0b73aee4decad847bc18"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.2/pharus-agent-windows-x86_64.exe",
+          "sha256": "c0e6b6825784b3f5c7562d0c989b8187d3695460d0c1ec9d24f881d850bf7b28"
+        }
+      }
+    },
+    {
+      "version": "0.6.3",
+      "notes": {
+        "zh-CN": "1. 修复自动检查：不再把低版本误报为「新版本」（仅当清单最高版本高于当前才提示）\n2. 版本选择器按新到旧排序，默认选最新版本\n3. 更新弹窗放大（modal-wide），更新说明区更高、可完整查看\n4. 版本号升至 0.6.3",
+        "en": "1. Fix auto-check: no longer shows a lower version as \"new\" (hints only when the manifest's highest version is above the current)\n2. Version picker lists newest first and defaults to it\n3. Larger update modal (modal-wide) with a taller, fully visible release-notes area\n4. Version bump to 0.6.3",
+        "ja": "1. 自動チェックの修正：低いバージョンを「新バージョン」と誤表示しない（マニフェストの最高バージョンが現在より高い場合のみ提示）\n2. バージョン選択は新しい順、デフォルトは最新\n3. 更新モーダル拡大（modal-wide）、リリースノート表示域も拡大\n4. バージョン 0.6.3",
+        "ru": "1. Исправление авто-проверки: низкая версия больше не показывается как «новая» (подсказка только если максимальная версия манифеста выше текущей)\n2. Выбор версии — от новой к старой, по умолчанию последняя\n3. Увеличенное модальное окно обновления (modal-wide) и более высокая область примечаний\n4. Версия 0.6.3"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-linux-x86_64.tar.gz",
+          "sha256": "158e85f262fc72e23ac50d66136b612c24663c49332e4b096c85cb44cbcebb2b"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-linux-aarch64.tar.gz",
+          "sha256": "07afad621b25a41777928c7b4bf47540e339e1256832bbb6547135f65d1eb413"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-linux-i686.tar.gz",
+          "sha256": "e70493619c3c199aed60577d28abbabbcf5b16fbb84e080d2cc8d20c3697286e"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "3d5c2dd84fa53633bd9b056776bd18d9e76b4d67f65881c075bbf8c080da1a8f"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "3f7b3ed0e88720c1a0ac6369122de3372f5ab4af1d969cb974247d8f79889372"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-linux-i686.tar.gz",
+          "sha256": "8ed54c873b7793b62de96644a444370375142de4152e3b65669de9256d2fce22"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.3/pharus-agent-windows-x86_64.exe",
+          "sha256": "2ed6445c678c5fac60cbeb80dde27574457d0136a66c7dbff0d4fdbaf6fe5526"
+        }
+      }
+    },
+    {
+      "version": "0.6.4",
+      "notes": {
+        "zh-CN": "1. 在线更新进度条：更新面板或 agent 时实时显示「下载中 / 校验中 / 应用中 / 正在重启」进度\n2. 修复点击更新无反应：更新请求此前因脚本错误而静默失败\n3. agent 更新完成后自动关闭弹窗，并刷新主机版本\n4. 首页与返回链接改用 /（不再出现 /index）\n5. 主机详情页板块间距统一\n6. 版本号升至 0.6.4",
+        "en": "1. Online-update progress bar: live downloading/verifying/applying/restarting progress when updating the panel or an agent\n2. Fix silent update clicks: the request previously failed quietly due to a script error\n3. The modal closes automatically after an agent update and the host version refreshes\n4. Homepage and back links use / (no more /index in the address bar)\n5. Unified host detail panel spacing\n6. Version bump to 0.6.4",
+        "ja": "1. オンライン更新の進捗バー：パネルやエージェントの更新時に「ダウンロード中 / 検証中 / 適用中 / 再起動中」をリアルタイム表示\n2. 更新クリックが効かない問題を修正（スクリプトエラーで静かに失敗していた）\n3. エージェント更新後はモーダルを自動で閉じ、ホストのバージョンを更新\n4. ホームと戻るリンクは / を使用（アドレスバーに /index が出ない）\n5. ホスト詳細ページのパネル間隔を統一\n6. バージョン 0.6.4",
+        "ru": "1. Индикатор прогресса обновления: при обновлении панели или агента в реальном времени показывается «Загрузка / Проверка / Применение / Перезапуск»\n2. Исправлено молчаливое нажатие обновления: запрос ранее тихо падал из-за ошибки скрипта\n3. После обновления агента модальное окно закрывается автоматически, версия хоста обновляется\n4. Ссылки на главную используют / (в адресной строке больше нет /index)\n5. Единый интервал между панелями на странице хоста\n6. Версия 0.6.4"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-linux-x86_64.tar.gz",
+          "sha256": "4873161b27f067a92e22fc51be94a92b0cfde40a4baa67a17bee5298d8241fe8"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-linux-aarch64.tar.gz",
+          "sha256": "d1e971e1af231245f5f495ffb666d7b974224657d82918eabe3eb47e8b60e428"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-linux-i686.tar.gz",
+          "sha256": "c99c49537ed278037ff6cababa07429ae2d0bf8707ab34bf3f07c2f838c1e20f"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "e323f163421864ebf137aeb9378c72fba66fa6b1b959dc1f77006bc1668f5625"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "4f16d76f82a9f5caf8c46a29d2a3d678a529fc2ee3a8021a72332442ccd41b3a"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-linux-i686.tar.gz",
+          "sha256": "5713fd54f1aca4ab7c58ead5096c8d822622f2177de9d9d8fd447ea5c4528401"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.6.4/pharus-agent-windows-x86_64.exe",
+          "sha256": "cc9e08f63a4a672f2669d26bf0c40a848a9dd0df710e2ad3de7b9ad7ed73da04"
+        }
+      }
+    },
+    {
+      "version": "0.7.0",
+      "notes": {
+        "zh-CN": "1. 指标扩展：新增 CPU 温度、GPU（名称/利用率/显存，来自 nvidia-smi）、进程数、连接数，实时显示在主机页硬件信息面板\n2. 服务探活：Ping 任务新增 SSL 证书检测（剩余天数）与 HTTP 状态码，主机页直接显示证书过期时间与响应码\n3. 多用户权限：支持创建多个账号，区分管理员（admin）与只读（viewer）角色；后台新增用户管理页，可禁用/删除/改密\n4. Docker 容器监控：agent 采集容器状态/CPU/内存，主机页新增 Docker 容器面板\n5. 主题商店：后台主题页新增「主题商店」区，可从远程清单一键安装主题；支持自定义第三方源\n6. Web 终端：主机页新增「终端」按钮，通过 WebSocket 打开交互式 shell（管理员可用）",
+        "en": "1. Extended metrics: CPU temperature, GPU (name / utilization / VRAM from nvidia-smi), process count and connection count, shown live in the host hardware panel\n2. Service checks: ping tasks now support SSL certificate probes (days to expiry) and HTTP status codes, displayed directly on the host page\n3. Multi-user: create multiple accounts with admin / read-only viewer roles; a user-management page in the admin console to disable, delete or reset passwords\n4. Docker monitoring: the agent reports container state / CPU / memory; the host page gains a Docker containers panel\n5. Theme store: a store section in the themes admin page installs themes from a remote manifest in one click; third-party sources are configurable\n6. Web terminal: a Terminal button on the host page opens an interactive shell over WebSocket (admin only)",
+        "ja": "1. メトリクス拡張：CPU 温度、GPU（名前/使用率/VRAM、nvidia-smi）、プロセス数、接続数をホストのハードウェアパネルにリアルタイム表示\n2. サービス監視：ping タスクに SSL 証明書チェック（有効期限まで）と HTTP ステータスコードを追加、ホストページに表示\n3. 複数ユーザー：管理者（admin）と読み取り専用（viewer）ロールで複数アカウントを作成可能。管理画面にユーザー管理ページ（無効化/削除/パスワード変更）\n4. Docker 監視：agent がコンテナの状態/CPU/メモリを報告、ホストページに Docker コンテナパネル\n5. テーマストア：テーマ管理に「テーマストア」セクションを追加、リモートマニフェストからワンクリックでインストール。サードパーティソースも設定可能\n6. Web ターミナル：ホストページの「ターミナル」ボタンから WebSocket で対話型シェル（管理者のみ）",
+        "ru": "1. Расширенные метрики: температура CPU, GPU (имя / загрузка / видеопамять из nvidia-smi), количество процессов и соединений — в реальном времени на панели оборудования хоста\n2. Проверка сервисов: ping-задачи поддерживают SSL-сертификаты (дней до истечения) и HTTP-статусы, отображаются на странице хоста\n3. Несколько пользователей: роли admin / viewer (только чтение), страница управления пользователями в админке (отключение, удаление, смена пароля)\n4. Мониторинг Docker: agent сообщает состояние / CPU / память контейнеров, на странице хоста появляется панель Docker\n5. Магазин тем: секция в управлении темами, установка тем из удалённого манифеста в один клик; настраиваемые сторонние источники\n6. Веб-терминал: кнопка «Терминал» на странице хоста открывает интерактивный shell по WebSocket (только для администраторов)"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-linux-x86_64.tar.gz",
+          "sha256": "0ffed4fa5099ef07093b97e8f7f8206dc59e25d3aa65fc59f989cdc8f756c570"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-linux-aarch64.tar.gz",
+          "sha256": "b7da23c5b61c9c97a496943a19dce91fec397bf79988ae9effe0bef0aec9380f"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-linux-i686.tar.gz",
+          "sha256": "6ee5f3ba1ab71237fd102df6043be43a4b1a6d30e839e6cac7fdc5b8d6d57f71"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "d7900e783bbd8a6a137098a1c96ca0cebe531b9b272ef81ea3486bf15f98714b"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "20ea856e442476fc68aa2335f48abee09cf3f759ca071535e6f33a77d1684a96"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-linux-i686.tar.gz",
+          "sha256": "6a2a9c27dcb3b67d47b0816510e1d885090d5e450085b8f5aadc8c2da09f18eb"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.0/pharus-agent-windows-x86_64.exe",
+          "sha256": "6264cd3510e2f0fc935c258f793c6a7113d2f9e007d08135136ad11f302b1cde"
+        }
+      }
+    },
+    {
+      "version": "0.7.1",
+      "notes": {
+        "zh-CN": "1. 修复 Agent 在线更新失败：服务加固（ProtectSystem）导致 /usr 只读、无法替换二进制（EROFS），现已允许 Agent 更新自身\n2. 修复面板在线更新跨磁盘分区失败：主题目录改用跨分区安全的复制方式、二进制就地重命名（避开 EXDEV），更新完成后由 systemd 自动重启面板",
+        "en": "1. Fix agent online updates: service hardening (ProtectSystem) made /usr read-only so the agent could not swap its own binary (EROFS); the binary directory is now writable\n2. Fix panel self-update across disk partitions: themes are swapped with a cross-device-safe copy and the binary with an in-place rename (avoids EXDEV); systemd restarts the panel when the update completes",
+        "ja": "1. agent オンライン更新の修正：サービス強化（ProtectSystem）で /usr が読み取り専用になりバイナリを置換できなかった問題（EROFS）を解消。バイナリディレクトリが書き込み可能に\n2. パネル自己更新のパーティション越え失敗を修正：themes はクロスデバイス安全なコピー、バイナリはリネームで置換（EXDEV を回避）。更新完了後は systemd がパネルを自動再起動",
+        "ru": "1. Исправлено онлайн-обновление агента: из-за усиления службы (ProtectSystem) каталог /usr был доступен только для чтения, и агент не мог заменить свой бинарник (EROFS) — теперь каталог бинарника доступен для записи\n2. Исправлено самообновление панели между разделами диска: themes заменяются кросс-устройственным копированием, бинарник — переименованием на месте (без EXDEV); после завершения обновления systemd перезапускает панель"
+      },
+      "server": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-linux-x86_64.tar.gz",
+          "sha256": "b8c16ddfb6e1c03e68ce67143319724fc526af8a2628a37b69abd4c73fa2df30"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-linux-aarch64.tar.gz",
+          "sha256": "5260c9a623d01615655a4c62f75738aca01bd4c8492f738390ae0b63a8d014c8"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-linux-i686.tar.gz",
+          "sha256": "f137a6a70bc9d8d8c4077b30cef7abe77d2361bf3be4e91c179a810d734fc9c5"
+        }
+      },
+      "agent": {
+        "linux-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-linux-x86_64.tar.gz",
+          "sha256": "6c8008ac9e72967d2faadef50e9685bcef284140c8243169f929c4c0772f16aa"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-linux-aarch64.tar.gz",
+          "sha256": "f99356c896e266deb462c16b22262a280e5586d4c3d5770f8a9776524aec7e34"
+        },
+        "linux-i686": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-linux-i686.tar.gz",
+          "sha256": "c7763da01efa9e480eb0e649d08c8d2f96f6f3e3e712ff063867bc2ce3b278c4"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/pharus-monitor/pharus/releases/download/v0.7.1/pharus-agent-windows-x86_64.exe",
+          "sha256": "320838fff42cab81c6041deec1a343f5dc84c1ad2fc9ce1edb83049432dfaf7d"
+        }
+      }
+    }
+  ]
+}

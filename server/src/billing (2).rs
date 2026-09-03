@@ -81,14 +81,13 @@ pub fn apply_metrics<Tz: TimeZone>(
     }
     match t.last_rx_total {
         Some(prev) if m.net_rx_total >= prev => t.rx_bytes += m.net_rx_total - prev,
-        // Counter went backwards (agent reboot / reconnect): re-baseline only.
-        // The next sample will compute the correct delta from this new value.
-        Some(_) => {}
+        // counter went backwards: agent rebooted, count from its new zero
+        Some(_) => t.rx_bytes += m.net_rx_total,
         None => {}
     }
     match t.last_tx_total {
         Some(prev) if m.net_tx_total >= prev => t.tx_bytes += m.net_tx_total - prev,
-        Some(_) => {}
+        Some(_) => t.tx_bytes += m.net_tx_total,
         None => {}
     }
     t.last_rx_total = Some(m.net_rx_total);
@@ -198,12 +197,8 @@ mod tests {
         let mut t = TrafficState::default();
         let b = BillingInfo::default();
         apply_metrics(&mut t, &b, &metrics(5000, 0), at(2026, 8, 6, 12));
-        // Counter dropped: agent rebooted. Re-baseline only, no accumulation.
         apply_metrics(&mut t, &b, &metrics(700, 0), at(2026, 8, 6, 12));
-        assert_eq!(t.rx_bytes, 0);
-        // Next sample computes the correct delta from the new baseline.
-        apply_metrics(&mut t, &b, &metrics(1200, 0), at(2026, 8, 6, 12));
-        assert_eq!(t.rx_bytes, 500);
+        assert_eq!(t.rx_bytes, 700); // counter dropped -> agent rebooted
     }
 
     #[test]

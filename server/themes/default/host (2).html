@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="doc.title.host">Pharus · Host</title>
-  <link rel="stylesheet" href="style.css?v=0.7.2" />
+  <link rel="stylesheet" href="style.css?v=0.7.1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 3 20.5 12h7Z' fill='%23fbbf24'/%3E%3Cpath d='M19.5 13h9L31 44H17Z' fill='none' stroke='%23fbbf24' stroke-width='3'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -124,7 +124,6 @@
         <div class="diag-tabs" role="tablist">
           <button class="diag-tab active" id="diag-tab-lg" type="button" role="tab" data-i18n="diag.tabLg">Looking Glass</button>
           <button class="diag-tab" id="diag-tab-iperf" type="button" role="tab" hidden data-i18n="diag.iperf3">带宽测速</button>
-          <button class="diag-tab" id="diag-tab-speedtest" type="button" role="tab" hidden data-i18n="diag.speedtest">内置测速</button>
         </div>
         <div id="diag-lg-group">
           <div class="panel-controls diag-controls">
@@ -141,7 +140,6 @@
             <button class="btn" id="diag-ping" type="button" data-i18n="diag.ping">Ping</button>
             <button class="btn" id="diag-traceroute" type="button" data-i18n="diag.traceroute">路由追踪</button>
             <button class="btn" id="diag-mtr" type="button" data-i18n="diag.mtr">MTR</button>
-            <button class="btn" id="term-btn" type="button" hidden data-i18n="host.terminal">终端</button>
           </div>
         </div>
         <div id="diag-iperf-group" hidden>
@@ -177,26 +175,6 @@
               <input id="diag-iperf-length" type="number" min="1" placeholder="默认" />
             </label>
             <button class="btn" id="diag-iperf-btn" type="button" data-i18n="diag.iperf3">带宽测速</button>
-          </div>
-        </div>
-        <div id="diag-speedtest-group" hidden>
-          <div class="speedtest-controls" id="diag-speedtest">
-            <label class="field compact">
-              <span data-i18n="diag.testSize">测试大小</span>
-              <select id="diag-speedtest-size">
-                <option value="10485760">10 MB</option>
-                <option value="52428800">50 MB</option>
-                <option value="104857600">100 MB</option>
-              </select>
-            </label>
-            <label class="field compact">
-              <span data-i18n="diag.direction">方向</span>
-              <select id="diag-speedtest-dir">
-                <option value="down" data-i18n="diag.directionDown">下行</option>
-                <option value="up" data-i18n="diag.directionUp">上行</option>
-              </select>
-            </label>
-            <button class="btn" id="diag-speedtest-btn" type="button" data-i18n="diag.speedtest">内置测速</button>
           </div>
         </div>
         <p class="panel-message error" id="diag-error" role="alert" hidden></p>
@@ -243,6 +221,9 @@
           <div class="host-name-row">
             <h2 data-f="name">—</h2>
             <button class="rename-ic" id="rename-btn" type="button" hidden aria-label="改名" title="改名" data-i18n-aria="admin.rename">✏️</button>
+            <button class="ssh-btn" data-f="sshBtn" type="button" hidden aria-label="SSH 终端" title="SSH 终端" data-i18n-aria="host.terminal" data-i18n-title="host.terminal">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            </button>
           </div>
           <p data-f="os">—</p>
           <div class="ip-row">
@@ -513,9 +494,28 @@
   <div class="modal-mask" id="term-modal" hidden>
     <div class="modal modal-wide term-modal">
       <div class="modal-head">
-        <h3 data-i18n="host.terminal">终端</h3>
+        <h3 data-i18n="host.terminal">SSH 终端</h3>
         <button class="modal-x" id="term-x" type="button" aria-label="关闭">×</button>
       </div>
+      <form class="term-login" id="term-login" hidden>
+        <label class="field">
+          <span data-i18n="ssh.user">SSH 用户名</span>
+          <input id="term-user" autocomplete="username" />
+        </label>
+        <label class="field">
+          <span data-i18n="ssh.password">SSH 密码</span>
+          <input id="term-pass" type="password" autocomplete="current-password" />
+        </label>
+        <label class="toggle-field term-save-row">
+          <input type="checkbox" id="term-save" checked />
+          <span data-i18n="ssh.save">记住凭据（加密保存，下次免输入）</span>
+        </label>
+        <p class="modal-err" id="term-login-err" hidden></p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="term-login-cancel" type="button" data-i18n="admin.cancel">取消</button>
+          <button class="btn primary" id="term-login-ok" type="button" data-i18n="ssh.connect">连接</button>
+        </div>
+      </form>
       <pre class="term-out" id="term-out"></pre>
       <div class="term-input-row">
         <input id="term-input" class="term-input" autocomplete="off" spellcheck="false" placeholder="$" data-i18n-placeholder="host.terminalPlaceholder" />
@@ -524,7 +524,7 @@
     </div>
   </div>
 
-  <script src="common.js?v=0.7.2"></script>
-  <script src="host.js?v=0.7.2"></script>
+  <script src="common.js?v=0.7.1"></script>
+  <script src="host.js?v=0.7.1"></script>
 </body>
 </html>

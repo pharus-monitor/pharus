@@ -9,8 +9,8 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 
 /// Looking glass (ping / traceroute), MTR, streaming-unlock checks, ping tasks,
-/// custom script tasks.
-pub const FEATURES: &[&str] = &["lg", "mtr", "iperf3", "streaming", "ping", "tasks"];
+/// custom script tasks, built-in speedtest.
+pub const FEATURES: &[&str] = &["lg", "mtr", "iperf3", "speedtest", "streaming", "ping", "tasks"];
 
 const PREFIX: &str = "feature_";
 
