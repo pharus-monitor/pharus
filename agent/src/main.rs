@@ -248,7 +248,7 @@ fn collect_process_count(sys: &mut System) -> u32 {
     sys.processes().len() as u32
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 fn collect_connections() -> u32 {
     use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags};
     match get_sockets_info(
@@ -258,6 +258,13 @@ fn collect_connections() -> u32 {
         Ok(list) => list.len() as u32,
         Err(_) => 0,
     }
+}
+
+/// Neither a Windows API nor `/proc/net` exists here; report zero rather
+/// than break the build. (netstat2 is a Windows-only dependency.)
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn collect_connections() -> u32 {
+    0
 }
 
 /// Linux has no portable userland socket-table API, so count the sockets
@@ -338,7 +345,26 @@ fn collect_metrics(sys: &System, disks: &Disks, rx_diff: u64, tx_diff: u64, rx_t
     let cpu_usage = sys.global_cpu_usage();
     let mut disk_used = 0u64;
     let mut disk_total = 0u64;
+    // systemd sandboxing (ProtectSystem/PrivateTmp) bind-mounts the same
+    // filesystem at several paths inside the agent's mount namespace; summing
+    // naively counts the root disk once per bind. Bind mounts share st_dev,
+    // so dedupe by it. tmpfs/devtmpfs are RAM, not storage — skip them.
+    #[cfg(unix)]
+    let mut seen_devs = std::collections::HashSet::new();
     for d in disks.list() {
+        let fs = d.file_system().to_str().unwrap_or("");
+        if fs == "tmpfs" || fs == "devtmpfs" {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(m) = std::fs::metadata(d.mount_point()) {
+                if !seen_devs.insert(m.dev()) {
+                    continue;
+                }
+            }
+        }
         disk_total = disk_total.saturating_add(d.total_space());
         disk_used = disk_used.saturating_add(d.total_space().saturating_sub(d.available_space()));
     }
@@ -383,6 +409,19 @@ struct Shared {
     custom_tasks: Mutex<Vec<CustomTaskSpec>>,
     /// Open interactive terminal sessions keyed by session_id.
     terms: Mutex<HashMap<String, TermSession>>,
+    /// Effective feature set pushed by the server in TasksSync. `None` until
+    /// the first sync (or when the server is too old to send it), which we
+    /// treat as "everything enabled" for backward compatibility.
+    features: Mutex<Option<Vec<String>>>,
+}
+
+impl Shared {
+    fn feature_enabled(&self, name: &str) -> bool {
+        match &*self.features.lock().unwrap() {
+            None => true,
+            Some(list) => list.iter().any(|f| f == name),
+        }
+    }
 }
 
 /* ---------- interactive terminal (web console) ---------- */
@@ -846,9 +885,56 @@ fn extract_detail(body: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Builds an HTTP client pinned to one address family so the unlock probes
+/// measure IPv4 and IPv6 independently (Happy Eyeballs would otherwise pick
+/// whichever connects first, hiding a broken family).
+fn build_family_client(ipv4: bool) -> reqwest::Client {
+    let addr: std::net::IpAddr = if ipv4 {
+        std::net::Ipv4Addr::UNSPECIFIED.into()
+    } else {
+        std::net::Ipv6Addr::UNSPECIFIED.into()
+    };
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .local_address(addr)
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// IPv6-egress check with real packets: a UDP `connect` only proves a route
+/// exists, which passes on hosts whose IPv6 is configured but dead upstream.
+/// A TCP handshake to any of these public resolvers proves the path works.
+/// Probed once per unlock round (30 min) — cheap enough, and a family that
+/// comes back gets picked up on the next round.
+async fn ipv6_reachable() -> bool {
+    use std::net::{Ipv6Addr, SocketAddrV6};
+    const TARGETS: [([u16; 8], u16); 2] = [
+        ([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888], 443), // Google DNS
+        ([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111], 443), // Cloudflare DNS
+    ];
+    for (segments, port) in TARGETS {
+        let addr = SocketAddrV6::new(Ipv6Addr::from(segments), port, 0, 0);
+        let attempt = async {
+            let sock = tokio::net::TcpSocket::new_v6().ok()?;
+            sock.connect(addr.into()).await.ok()
+        };
+        if tokio::time::timeout(Duration::from_secs(3), attempt)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 async fn run_unlock_checks(
     client: &reqwest::Client,
     prev: &HashMap<String, UnlockResult>,
+    proto: &str,
 ) -> Vec<UnlockResult> {
     let mut out = Vec::with_capacity(UNLOCK_CHECKS.len());
     for c in UNLOCK_CHECKS {
@@ -884,6 +970,7 @@ async fn run_unlock_checks(
             Ok((status, body))
         }
         .await;
+        let cache_key = format!("{}|{}", c.service, proto);
         let r = match result {
             Ok((code, body)) if (200..300).contains(&code) => {
                 let ok = c.want_substr.map(|s| body.contains(s)).unwrap_or(true);
@@ -891,26 +978,30 @@ async fn run_unlock_checks(
                     service: c.service.into(),
                     status: if ok { "yes".into() } else { "no".into() },
                     detail: c.detail_key.and_then(|k| extract_detail(&body, k)),
+                    proto: Some(proto.into()),
                 }
             }
             Ok((403, _)) => UnlockResult {
                 service: c.service.into(),
                 status: "no".into(),
                 detail: None,
+                proto: Some(proto.into()),
             },
             Ok((code, _)) => UnlockResult {
                 service: c.service.into(),
                 status: "fail".into(),
                 detail: Some(format!("http {code}")),
+                proto: Some(proto.into()),
             },
             // No HTTP response at all (timeout/reset/TLS): transient, keep
             // showing the last known state instead of a spurious failure.
-            Err(e) => match prev.get(c.service) {
+            Err(e) => match prev.get(&cache_key) {
                 Some(p) => p.clone(),
                 None => UnlockResult {
                     service: c.service.into(),
                     status: "fail".into(),
                     detail: Some(e.to_string()),
+                    proto: Some(proto.into()),
                 },
             },
         };
@@ -919,17 +1010,44 @@ async fn run_unlock_checks(
     out
 }
 
-async fn unlock_loop(msg_tx: MsgTx, client: reqwest::Client) {
+async fn unlock_loop(msg_tx: MsgTx) {
     // let metrics flow first after (re)connecting
     sleep(Duration::from_secs(5)).await;
+    let client_v4 = build_family_client(true);
+    // Building the v6 client binds to `[::]`; a missing stack fails there.
+    let client_v6 = std::net::UdpSocket::bind(std::net::SocketAddrV6::new(
+        std::net::Ipv6Addr::UNSPECIFIED,
+        0,
+        0,
+        0,
+    ))
+    .is_ok()
+    .then(|| build_family_client(false));
     let mut tick = interval(Duration::from_secs(30 * 60));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut last: HashMap<String, UnlockResult> = HashMap::new();
     loop {
         tick.tick().await;
-        let results = run_unlock_checks(&client, &last).await;
+        let mut results = run_unlock_checks(&client_v4, &last, "ipv4").await;
+        if let Some(c6) = &client_v6 {
+            if ipv6_reachable().await {
+                results.extend(run_unlock_checks(c6, &last, "ipv6").await);
+            } else {
+                // IPv6 path is down this round: re-report the last known v6
+                // results unchanged (the server replaces its stored set with
+                // whatever we send, so skipping the family would wipe it).
+                // A host that NEVER had v6 has no cached rows and reports
+                // none — the UI reads that as "no IPv6", which is correct.
+                for c in UNLOCK_CHECKS {
+                    if let Some(p) = last.get(&format!("{}|ipv6", c.service)) {
+                        results.push(p.clone());
+                    }
+                }
+            }
+        }
         for r in &results {
-            last.insert(r.service.clone(), r.clone());
+            let key = format!("{}|{}", r.service, r.proto.clone().unwrap_or_default());
+            last.insert(key, r.clone());
         }
         if msg_tx.send(AgentMsg::Unlock { results }).is_err() {
             return;
@@ -957,6 +1075,7 @@ fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tok
         }
         TaskKind::Mtr => return None,
         TaskKind::Iperf3 => return None,
+        TaskKind::Speedtest => return None,
         TaskKind::Script => {
             let mut c = std::process::Command::new("cmd");
             c.args(["/C", target]);
@@ -982,6 +1101,7 @@ fn task_command(kind: TaskKind, target: &str, cycles: Option<u32>) -> Option<tok
             c
         }
         TaskKind::Iperf3 => return None,
+        TaskKind::Speedtest => return None,
         TaskKind::Script => {
             let mut c = std::process::Command::new("sh");
             c.args(["-c", target]);
@@ -2061,9 +2181,11 @@ async fn collect_containers(
     Some(out)
 }
 
-/// Report Docker containers every ~15s. Exits silently when the host has no
-/// Docker daemon reachable (nothing to monitor).
-async fn docker_loop(msg_tx: MsgTx) {
+/// Report Docker containers every ~15s while the `docker` feature is enabled
+/// on the server. Exits silently when the host has no Docker daemon reachable
+/// (nothing to monitor); the per-tick gate means a later config change takes
+/// effect without touching this loop.
+async fn docker_loop(msg_tx: MsgTx, shared: Arc<Shared>) {
     sleep(Duration::from_secs(5)).await;
     let docker = match bollard::Docker::connect_with_local_defaults() {
         Ok(d) => d,
@@ -2074,6 +2196,9 @@ async fn docker_loop(msg_tx: MsgTx) {
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
+        if !shared.feature_enabled("docker") {
+            continue;
+        }
         let Some(containers) = collect_containers(&docker, &mut prev).await else {
             continue;
         };
@@ -2143,7 +2268,7 @@ async fn run_session(cfg: &Config) -> Result<()> {
                             info!(targets = tcping.len(), "tcping config updated");
                             *shared.tcping.lock().unwrap() = tcping;
                         }
-                        Ok(ServerToAgentMsg::TasksSync { ping_tasks, custom_tasks }) => {
+                        Ok(ServerToAgentMsg::TasksSync { ping_tasks, custom_tasks, features }) => {
                             info!(
                                 pings = ping_tasks.len(),
                                 tasks = custom_tasks.len(),
@@ -2151,6 +2276,9 @@ async fn run_session(cfg: &Config) -> Result<()> {
                             );
                             *shared.ping_tasks.lock().unwrap() = ping_tasks;
                             *shared.custom_tasks.lock().unwrap() = custom_tasks;
+                            if let Some(f) = features {
+                                *shared.features.lock().unwrap() = Some(f);
+                            }
                         }
                         Ok(ServerToAgentMsg::Update {
                             request_id,
@@ -2259,8 +2387,8 @@ async fn run_session(cfg: &Config) -> Result<()> {
 
     let pings = tokio::spawn(ping_scheduler(msg_tx.clone(), shared.clone(), http.clone()));
     let tasks = tokio::spawn(custom_task_scheduler(msg_tx.clone(), shared.clone()));
-    let unlock = tokio::spawn(unlock_loop(msg_tx.clone(), http));
-    let docker = tokio::spawn(docker_loop(msg_tx.clone()));
+    let unlock = tokio::spawn(unlock_loop(msg_tx.clone()));
+    let docker = tokio::spawn(docker_loop(msg_tx.clone(), shared.clone()));
     // Whichever task ends first aborts the session, and the rest would otherwise
     // keep running against a socket nobody reads while the next attempt opens a
     // second one.

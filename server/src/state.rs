@@ -92,6 +92,18 @@ pub struct AppState {
     /// Rolling timestamps of dispatched iperf3 runs, per agent, for an hourly
     /// per-machine budget (the backstop against IP-rotating abuse).
     pub iperf3_by_agent: Mutex<HashMap<i64, Vec<std::time::Instant>>>,
+    /// Rolling timestamps of accepted speedtest download/upload requests, per
+    /// client IP, for an hourly per-visitor budget.
+    pub speedtest_by_ip: Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    /// Speedtest data connections currently in flight (global cap).
+    pub speedtest_inflight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Rolling timestamps of ping-visitor requests, per client IP (separate
+    /// budget from the other diagnostics so they don't starve each other).
+    pub ping_visitor_by_ip: Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    /// Synchronous waiters for diag output: request_id -> collected stdout and
+    /// the channel completing when the agent signals `done`.
+    pub diag_waiters:
+        Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<String>)>>,
     /// Cached online-update manifest (fetched from `update_manifest_url`).
     pub update_cache: Mutex<Option<(crate::updates::UpdateManifest, std::time::Instant)>>,
     /// Cached theme-store manifest (fetched from `theme_store_url`).
@@ -189,6 +201,7 @@ impl AppState {
         let _ = tx.send(pharus_common::ServerToAgentMsg::TasksSync {
             ping_tasks: if allows("ping") { ping_tasks } else { Vec::new() },
             custom_tasks: if allows("tasks") { custom_tasks } else { Vec::new() },
+            features: Some(features),
         });
     }
 

@@ -47,8 +47,7 @@
   var diagIperfGroup = document.getElementById('diag-iperf-group');
   var diagSpeedtestGroup = document.getElementById('diag-speedtest-group');
   var diagSpeedtestBtn = document.getElementById('diag-speedtest-btn');
-  var diagSpeedtestSize = document.getElementById('diag-speedtest-size');
-  var diagSpeedtestDir = document.getElementById('diag-speedtest-dir');
+  var diagSpeedtestMode = document.getElementById('diag-speedtest-mode');
   var diagError = document.getElementById('diag-error');
   var diagSessions = document.getElementById('diag-sessions');
   var diagEmpty = document.getElementById('diag-empty');
@@ -215,6 +214,9 @@
     entry.unlock.forEach(function (result) {
       var status = P.serviceStatus(result);
       var label = result.service || result.name || t('streaming.service');
+      // Dual-stack agents report each service once per address family.
+      if (result.proto === 'ipv6') label += ' · ' + t('streaming.ipv6');
+      else if (result.proto === 'ipv4') label += ' · ' + t('streaming.ipv4');
       var unlocked = P.statusClass(status) === 'ok';
       var detail = result.region || result.detail
         || (unlocked && entry.region ? (entry.region.code || entry.region.name) : t('streaming.status.' + status));
@@ -227,8 +229,14 @@
   }
 
   function renderDocker() {
-    dockerPanel.hidden = !entry.info;
+    var enabled = P.hasFeature(entry, 'docker');
+    dockerPanel.hidden = !enabled || !entry.info;
     dockerWrap.innerHTML = '';
+    if (!enabled) {
+      dockerMessage.textContent = t('feature.disabled').replace('{feature}', t('feature.docker'));
+      dockerMessage.hidden = true;
+      return;
+    }
     if (!entry.info) return;
     var list = entry.containers || [];
     if (!list.length) {
@@ -1023,7 +1031,6 @@
     var lg = !!entry && P.hasFeature(entry, 'lg');
     var mtr = !!entry && P.hasFeature(entry, 'mtr');
     var iperf3 = !!entry && P.hasFeature(entry, 'iperf3');
-    var speedtest = !!entry && P.hasFeature(entry, 'speedtest');
     diagPing.hidden = !lg;
     diagTraceroute.hidden = !lg;
     diagMtr.hidden = !mtr;
@@ -1031,20 +1038,24 @@
     diagTraceroute.disabled = !online;
     diagMtr.disabled = !online;
     diagTabIperf.hidden = !iperf3;
-    diagTabSpeedtest.hidden = !speedtest;
+    diagTabSpeedtest.hidden = false; // browser-side speedtest, always available
     if (!iperf3 && !diagIperfGroup.hidden) showDiagTab('lg');
-    if (!speedtest && !diagSpeedtestGroup.hidden) showDiagTab('lg');
     diagIperfBtn.disabled = !online;
     diagSpeedtestBtn.disabled = !online;
     document.querySelector('.cycles-field').hidden = !mtr;
     if (entry && !online) {
       diagError.textContent = t('diag.offline');
       diagError.hidden = false;
-    } else if (entry && !lg && !mtr && !iperf3 && !speedtest) {
+      diagError.dataset.gate = '1';
+    } else if (entry && !lg && !mtr && !iperf3) {
       diagError.textContent = t('feature.disabled').replace('{feature}', t('feature.diagnostics'));
       diagError.hidden = false;
-    } else {
+      diagError.dataset.gate = '1';
+    } else if (diagError.dataset.gate === '1') {
+      // Only clear messages this gate set itself; transient errors from a
+      // failed run stay visible until the next action.
       diagError.hidden = true;
+      diagError.dataset.gate = '';
     }
   }
 
@@ -1111,14 +1122,8 @@
       } else if (message.kind === 'iperf3' && typeof message.result === 'object') {
         renderIperf3Result(request, message.result);
       } else if (message.kind === 'speedtest' && typeof message.result === 'object') {
-        if (message.stream === 'progress') {
-          // Real-time progress update
-          handleSpeedtestProgress(message);
-        } else {
-          // Final result
-          renderSpeedtestResult(request, message.result);
-          speedtestState.finalResult = message.result;
-        }
+        // Browser-side speedtest: ignore agent progress messages.
+        // The browser measures throughput directly via fetch streams.
       } else {
         appendDiagnosticPart(request, JSON.stringify(message.result, null, 2) + '\n', 'structured');
       }
@@ -1153,86 +1158,53 @@
   /* ---------- Speedtest real-time chart ---------- */
   var speedtestState = {
     running: false,
-    direction: null,
+    phase: null, // 'down' | 'up' | null
     requestId: null,
     points: [],
-    finalResult: null,
+    downBps: null,
+    upBps: null,
   };
 
-  function showSpeedtestChart(direction) {
-    resetSpeedtestState();
-    speedtestState.direction = direction;
+  function showSpeedtestChart(phase) {
+    speedtestState.phase = phase;
     speedtestState.running = true;
+    speedtestState.points = [];
     var container = document.getElementById('speedtest-chart-container');
     if (container) container.hidden = false;
     var resultEl = document.getElementById('speedtest-result');
     if (resultEl) resultEl.classList.add('speedtest-running');
-    // Reset display
     var gaugeValue = document.getElementById('speedtest-gauge-value');
     var gaugeUnit = document.getElementById('speedtest-gauge-unit');
     if (gaugeValue) gaugeValue.textContent = '0';
     if (gaugeUnit) gaugeUnit.textContent = 'Mbps';
-    document.getElementById('speedtest-down').textContent = '--';
-    document.getElementById('speedtest-up').textContent = '--';
-    document.getElementById('speedtest-duration').textContent = '--';
+    var phaseEl = document.getElementById('speedtest-phase');
+    if (phaseEl) phaseEl.textContent = phase === 'down' ? t('diag.speedtestDown') : t('diag.speedtestUp');
+    // Only reset the current phase's result, preserve the other phase's result
+    if (phase === 'down') {
+      document.getElementById('speedtest-down').textContent = '--';
+      document.getElementById('speedtest-latency').textContent = '--';
+    } else {
+      document.getElementById('speedtest-up').textContent = '--';
+    }
+    drawSpeedtestChart();
   }
 
   function resetSpeedtestState() {
     speedtestState = {
       running: false,
-      direction: null,
+      phase: null,
       requestId: null,
       points: [],
-      finalResult: null,
+      downBps: null,
+      upBps: null,
     };
     var container = document.getElementById('speedtest-chart-container');
     if (container) container.hidden = true;
     var resultEl = document.getElementById('speedtest-result');
     if (resultEl) resultEl.classList.remove('speedtest-running');
-  }
-
-  function handleSpeedtestProgress(message) {
-    var result = message.result;
-    if (!result) return;
-
-    speedtestState.running = !result.done;
-    speedtestState.direction = result.direction;
-
-    if (!result.done) {
-      // Add data point
-      speedtestState.points.push({
-        time: result.elapsed_ms,
-        bps: result.throughput_bps,
-      });
-
-      // Update gauge
-      updateSpeedtestGauge(result.throughput_bps);
-
-      // Update duration
-      var durationEl = document.getElementById('speedtest-duration');
-      if (durationEl && result.elapsed_ms) {
-        durationEl.textContent = (result.elapsed_ms / 1000).toFixed(1) + ' s';
-      }
-    } else {
-      // Final progress update - update stats
-      var resultEl = document.getElementById('speedtest-result');
-      if (resultEl) resultEl.classList.remove('speedtest-running');
-
-      if (result.direction === 'down') {
-        var downEl = document.getElementById('speedtest-down');
-        if (downEl && result.throughput_bps) {
-          downEl.textContent = iperfMbps(result.throughput_bps);
-        }
-      } else {
-        var upEl = document.getElementById('speedtest-up');
-        if (upEl && result.throughput_bps) {
-          upEl.textContent = iperfMbps(result.throughput_bps);
-        }
-      }
-    }
-
-    // Redraw chart
-    drawSpeedtestChart();
+    var phaseEl = document.getElementById('speedtest-phase');
+    if (phaseEl) phaseEl.textContent = '';
+    diagSpeedtestBtn.disabled = false;
   }
 
   function updateSpeedtestGauge(bps) {
@@ -1398,9 +1370,12 @@
 
   /* Renders the structured speedtest summary into the diagnostic session. */
   function renderSpeedtestResult(request, result) {
+    // Browser-side speedtest: results are displayed in the gauge UI directly.
+    // This function is kept for backward compatibility with agent-based results.
     var lines = [];
-    lines.push(t('diag.speedtest') + ' · ' + (result.direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
-    if (result.throughput_bps != null) lines.push(t('diag.speed') + ': ' + iperfMbps(result.throughput_bps));
+    var dir = result.direction === 'up' ? t('diag.directionUp') : t('diag.directionDown');
+    lines.push(t('diag.speedtest') + ' · ' + dir);
+    if (result.throughput_bps != null) lines.push(t('diag.speed') + ': ' + formatSpeed(result.throughput_bps));
     if (result.elapsed_ms != null) lines.push(t('diag.duration') + ': ' + (result.elapsed_ms / 1000).toFixed(1) + ' s');
     if (result.bytes_transferred != null) lines.push(t('diag.transferred') + ': ' + formatBytes(result.bytes_transferred));
     appendDiagnosticPart(request, lines.join('\n') + '\n', 'structured');
@@ -1551,36 +1526,331 @@
     });
   }
 
+  function formatSpeed(bps) {
+    var mbps = Number(bps) / 1e6;
+    if (mbps >= 1000) return (mbps / 1000).toFixed(2) + ' Gbps';
+    if (mbps >= 100) return mbps.toFixed(1) + ' Mbps';
+    if (mbps >= 10) return mbps.toFixed(2) + ' Mbps';
+    return mbps.toFixed(2) + ' Mbps';
+  }
+
+  /* Browser-side speedtest: directly tests browser ↔ server connection.
+     Bypasses both the agent AND any CDN/proxy (Cloudflare etc.),
+     so the result reflects the true network speed to the origin server. */
+  var SPEEDTEST_DOWN_SIZE = 100 * 1024 * 1024; // per-connection request size; time-boxed below
+  var SPEEDTEST_DOWN_MS = 10000; // download measurement window (speedtest.net-style)
+  var SPEEDTEST_UP_MS = 10000; // upload measurement window
+  var SPEEDTEST_UP_ROUND = 25 * 1024 * 1024; // one upload request payload; loops until the window ends
+  var SPEEDTEST_UP_ROUND_MULTI = 8 * 1024 * 1024; // per-connection payload in multi mode
+  var SPEEDTEST_CONNECTIONS = 4; // parallel streams in multi mode
+  var SPEEDTEST_INTERVAL_MS = 250;
+
+  /* Detect the direct server URL to bypass CDN.
+     The server may advertise a `speedtest_base` (e.g. https://direct.example.com)
+     or a plain `server_ip` (joined as http://ip:8080). When the page itself is
+     HTTPS, an http:// base would be blocked as mixed content, so we fall back
+     to same-origin (through the CDN) in that case. `v4`/`v6` are the
+     family-pinned subdomains used when the visitor picks a protocol. */
+  var _speedtestBases = null;
+  function getSpeedtestBases() {
+    // If already on a direct IP, use relative URLs
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(location.hostname)) return Promise.resolve({ base: '', v4: null, v6: null });
+    if (_speedtestBases !== null) return Promise.resolve(_speedtestBases);
+    return fetch('/api/server-ip').then(function (r) { return r.json(); }).then(function (d) {
+      function clean(b) {
+        if (!b) return null;
+        // HTTPS page cannot fetch from an http:// origin (mixed content).
+        if (location.protocol === 'https:' && b.indexOf('http:') === 0) return null;
+        return b;
+      }
+      _speedtestBases = {
+        base: clean(d && d.base) || '',
+        v4: clean(d && d.base_v4),
+        v6: clean(d && d.base_v6)
+      };
+      return _speedtestBases;
+    }).catch(function () {
+      _speedtestBases = { base: '', v4: null, v6: null };
+      return _speedtestBases;
+    });
+  }
+
+  /* Aggregate bytes across one or more parallel connections and emit throttled
+     progress. Timing starts at the first transferred byte, so DNS/TCP/TLS setup
+     does not dilute the measured throughput (critical on fast links where the
+     transfer itself takes ~1s). The final figure follows speedtest.net: the
+     mean of the fastest 60% of the 250ms samples — slow-start and transient
+     dips are excluded, the plateau is what counts. */
+  function makeSpeedAggregator(onProgress) {
+    var agg = { bytes: 0, startTime: 0, lastBytes: 0, lastTime: 0, lastByteTime: 0, instants: [] };
+    return {
+      start: function (now) {
+        if (!agg.startTime) { agg.startTime = now; agg.lastTime = now; agg.lastByteTime = now; }
+      },
+      add: function (n, now) {
+        if (!agg.startTime) return;
+        agg.bytes += n;
+        agg.lastByteTime = now;
+        var dt = now - agg.lastTime;
+        if (dt >= SPEEDTEST_INTERVAL_MS) {
+          var bps = (agg.bytes - agg.lastBytes) / (dt / 1000) * 8; // bytes -> bits
+          agg.instants.push(bps);
+          onProgress(bps, agg.bytes, now - agg.startTime);
+          agg.lastBytes = agg.bytes;
+          agg.lastTime = now;
+        }
+      },
+      result: function () {
+        var elapsed = agg.lastByteTime - agg.startTime;
+        if (elapsed <= 0) return { bps: 0, bytes: agg.bytes, elapsed: elapsed };
+        if (!agg.instants.length) {
+          return { bps: agg.bytes / (elapsed / 1000) * 8, bytes: agg.bytes, elapsed: elapsed };
+        }
+        var sorted = agg.instants.slice().sort(function (a, b) { return b - a; });
+        var topN = Math.max(1, Math.ceil(sorted.length * 0.6));
+        var sum = 0;
+        for (var i = 0; i < topN; i++) sum += sorted[i];
+        return { bps: sum / topN, bytes: agg.bytes, elapsed: elapsed };
+      },
+    };
+  }
+
+  function speedtestDownloadConn(base, size, deadline, agg) {
+    return new Promise(function (resolve, reject) {
+      fetch(base + '/api/speedtest/download?size=' + size).then(function (resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var reader = resp.body.getReader();
+        function pump() {
+          return reader.read().then(function (result) {
+            var now = performance.now();
+            if (result.done || now >= deadline) {
+              if (!result.done) reader.cancel().catch(function () {});
+              resolve();
+              return;
+            }
+            agg.start(now);
+            agg.add(result.value.byteLength, now);
+            return pump();
+          });
+        }
+        return pump();
+      }).catch(reject);
+    });
+  }
+
+  function browserSpeedtestDownload(base, onProgress, multi) {
+    var agg = makeSpeedAggregator(onProgress);
+    var deadline = performance.now() + SPEEDTEST_DOWN_MS;
+    var jobs = [];
+    for (var i = 0; i < (multi ? SPEEDTEST_CONNECTIONS : 1); i++) {
+      jobs.push(speedtestDownloadConn(base, SPEEDTEST_DOWN_SIZE, deadline, agg));
+    }
+    return Promise.all(jobs).then(function () { return agg.result(); });
+  }
+
+  /* Upload payloads are pre-generated once (native CSPRNG is fast) and reused,
+     so data generation never lands inside the measured window. */
+  var _speedtestPayloads = {};
+  function getSpeedtestPayload(size) {
+    if (!_speedtestPayloads[size]) {
+      var buf = new Uint8Array(size);
+      for (var off = 0; off < size; off += 65536) {
+        crypto.getRandomValues(buf.subarray(off, Math.min(off + 65536, size)));
+      }
+      _speedtestPayloads[size] = buf;
+    }
+    return _speedtestPayloads[size];
+  }
+
+  function speedtestUploadConn(base, payload, agg, deadline) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      var lastLoaded = 0;
+      var expired = false;
+      // The window is enforced in onprogress (data-driven) rather than
+      // setTimeout: timers are throttled to minutes in background tabs,
+      // which would let rounds run far past the deadline.
+      xhr.upload.onprogress = function (e) {
+        if (!e.lengthComputable || expired) return;
+        var now = performance.now();
+        if (now >= deadline) {
+          expired = true;
+          xhr.abort();
+          return;
+        }
+        agg.start(now);
+        agg.add(e.loaded - lastLoaded, now);
+        lastLoaded = e.loaded;
+      };
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error('HTTP ' + xhr.status));
+      };
+      // An abort at the window edge ends the round cleanly — bytes already
+      // reported through progress events stand.
+      xhr.onabort = function () { resolve(); };
+      xhr.onerror = function () { reject(new Error('network error')); };
+      xhr.open('POST', base + '/api/speedtest/upload');
+      // text/plain is CORS-safelisted, so no preflight is needed.
+      xhr.setRequestHeader('Content-Type', 'text/plain');
+      xhr.send(payload);
+    });
+  }
+
+  /* Upload in repeated rounds until the 10s window ends (speedtest.net style):
+     fast links run several rounds, slow links get cut mid-round and are rated
+     on what they actually sent. */
+  function speedtestUploadLoop(base, payload, agg, deadline) {
+    function round() {
+      if (performance.now() >= deadline) return Promise.resolve();
+      return speedtestUploadConn(base, payload, agg, deadline).then(round);
+    }
+    return round();
+  }
+
+  function browserSpeedtestUpload(base, onProgress, multi) {
+    var payload = getSpeedtestPayload(multi ? SPEEDTEST_UP_ROUND_MULTI : SPEEDTEST_UP_ROUND);
+    var agg = makeSpeedAggregator(onProgress);
+    var deadline = performance.now() + SPEEDTEST_UP_MS;
+    var jobs = [];
+    for (var i = 0; i < (multi ? SPEEDTEST_CONNECTIONS : 1); i++) {
+      jobs.push(speedtestUploadLoop(base, payload, agg, deadline));
+    }
+    return Promise.all(jobs).then(function () { return agg.result(); });
+  }
+
+  /* Latency = the agent pinging the visitor's own public IP (4 packets, we
+     show the minimum, speedtest.net-style). The server takes the visitor IP
+     from the request itself. This reads as "you ↔ this node" — the route is
+     symmetric enough in practice. Unreachable/timeout shows a distinct state
+     instead of a misleading fallback to the monitoring-server latency. */
+  function measureNodeLatency() {
+    var el = document.getElementById('speedtest-latency');
+    if (el) el.textContent = '…';
+    return fetch('/api/agents/' + hostId + '/ping-visitor', { method: 'POST', cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        if (!el) return null;
+        if (d && d.reachable && typeof d.rtt_min_ms === 'number') {
+          el.textContent = d.rtt_min_ms.toFixed(0) + ' ms';
+          return d.rtt_min_ms;
+        }
+        el.textContent = t('diag.unreachable');
+        return null;
+      })
+      .catch(function () {
+        if (el) el.textContent = '--';
+        return null;
+      });
+  }
+
+  /* Hide the IPv6 protocol option on hosts whose agent has no IPv6: the
+     streaming results carry one row per family, and a host that skipped its
+     v6 pass reports no ipv6 rows at all. Before the first results arrive the
+     option stays available (we can't tell yet). */
+  function updateSpeedtestProtoOptions() {
+    var sel = document.getElementById('diag-speedtest-proto');
+    if (!sel || !entry || !Array.isArray(entry.unlock) || !entry.unlock.length) return;
+    var hasV6 = entry.unlock.some(function (r) { return r.proto === 'ipv6'; });
+    var v6opt = sel.querySelector('option[value="ipv6"]');
+    if (v6opt) v6opt.disabled = !hasV6;
+    if (!hasV6 && sel.value === 'ipv6') sel.value = 'auto';
+  }
+
   function runSpeedtest() {
     diagError.hidden = true;
-    if (!entry || !entry.online) {
-      diagError.textContent = t('diag.offline');
-      diagError.hidden = false;
-      return;
-    }
-    if (!P.hasFeature(entry, 'speedtest')) {
-      diagError.textContent = t('feature.disabled').replace('{feature}', t('diag.speedtest'));
-      diagError.hidden = false;
-      return;
-    }
-    var size = parseInt(diagSpeedtestSize.value, 10) || 10485760;
-    var direction = diagSpeedtestDir.value;
-    var body = { agent_id: hostId, size: size, direction: direction };
+    // Browser-side speedtest measures browser ↔ server, no agent needed.
+    resetSpeedtestState();
+    diagSpeedtestBtn.disabled = true;
+    speedtestState.downBps = null;
+    speedtestState.upBps = null;
+    var viaDirect = null;
+    var multi = !!(diagSpeedtestMode && diagSpeedtestMode.value === 'multi');
+    var protoSel = document.getElementById('diag-speedtest-proto');
+    var proto = protoSel ? protoSel.value : 'auto';
 
-    // Show chart container and reset state
-    showSpeedtestChart(direction);
+    // Phase 1: Download
+    showSpeedtestChart('down');
 
-    P.requestJson('/api/diag/speedtest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }).then(function (response) {
-      if (!response.request_id) throw new Error(t('diag.missingRequestId'));
-      speedtestState.requestId = response.request_id;
-      createDiagnosticSession(response.request_id, hostId, 'speedtest', t('diag.speedtest') + ' · ' + (direction === 'up' ? t('diag.directionUp') : t('diag.directionDown')));
+    // Re-check the monthly quota on every run (no-store): the flag flips as
+    // soon as the quota runs out, even within a cached page.
+    var quotaCheck = fetch('/api/server-ip', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { return !!(d && d.quota_exceeded); })
+      .catch(function () { return false; });
+
+    Promise.all([getSpeedtestBases(), quotaCheck]).then(function (vals) {
+      var bases = vals[0];
+      if (vals[1]) throw new Error('quota_exceeded');
+      // Resolve the base for the chosen protocol family. An explicitly
+      // requested family with no configured endpoint is an error — silently
+      // falling back to the other family would measure the wrong thing.
+      var base;
+      if (proto === 'ipv4') {
+        base = bases.v4;
+        if (!base) throw new Error('proto_unavailable');
+      } else if (proto === 'ipv6') {
+        base = bases.v6;
+        if (!base) throw new Error('proto_unavailable');
+      } else {
+        base = bases.base;
+      }
+      viaDirect = base !== '';
+      // Latency (visitor ↔ this node) is measured on an idle line, before the
+      // download saturates it.
+      return measureNodeLatency().then(function () {
+        return browserSpeedtestDownload(base, function (bps, bytes, elapsed) {
+          speedtestState.points.push({ time: elapsed, bps: bps });
+          updateSpeedtestGauge(bps);
+          drawSpeedtestChart();
+        }, multi);
+      });
+    }).then(function (result) {
+      speedtestState.downBps = result.bps;
+      var downEl = document.getElementById('speedtest-down');
+      if (downEl) downEl.textContent = formatSpeed(result.bps);
+
+      // Phase 2: Upload — resolve the same base again (cached promise).
+      showSpeedtestChart('up');
+      return getSpeedtestBases().then(function (bases) {
+        var base;
+        if (proto === 'ipv4') base = bases.v4;
+        else if (proto === 'ipv6') base = bases.v6;
+        else base = bases.base;
+        return browserSpeedtestUpload(base, function (bps, bytes, elapsed) {
+          speedtestState.points.push({ time: elapsed, bps: bps });
+          updateSpeedtestGauge(bps);
+          drawSpeedtestChart();
+        }, multi);
+      });
+    }).then(function (result) {
+      speedtestState.upBps = result.bps;
+      var upEl = document.getElementById('speedtest-up');
+      if (upEl) upEl.textContent = formatSpeed(result.bps);
+
+      var resultEl = document.getElementById('speedtest-result');
+      if (resultEl) resultEl.classList.remove('speedtest-running');
+      var phaseEl = document.getElementById('speedtest-phase');
+      if (phaseEl) {
+        phaseEl.textContent = t('diag.speedtestDone')
+          + (viaDirect === true ? ' · ' + t('diag.viaDirect') : viaDirect === false ? ' · ' + t('diag.viaCdn') : '');
+      }
+      diagSpeedtestBtn.disabled = false;
     }).catch(function (error) {
-      diagError.textContent = t('common.error') + ': ' + (error && error.message ? error.message : error);
+      var msg = error && error.message ? error.message : String(error);
+      if (msg === 'quota_exceeded' || msg.indexOf('403') !== -1) {
+        msg = t('diag.quotaExceeded');
+      } else if (msg.indexOf('429') !== -1) {
+        msg = t('diag.rateLimited');
+      } else if (msg === 'proto_unavailable') {
+        msg = t('diag.protoUnavailable');
+      }
+      diagError.textContent = t('common.error') + ': ' + msg;
       diagError.hidden = false;
+      diagSpeedtestBtn.disabled = false;
     });
   }
 
@@ -1595,32 +1865,68 @@
 
   function renderServiceResults(results) {
     streamingResults.innerHTML = '';
-    (results || []).forEach(function (result) {
-      var status = P.serviceStatus(result);
-      var cardEl = document.createElement('article');
-      cardEl.className = 'service-result ' + P.statusClass(status);
-      var head = document.createElement('div');
-      head.className = 'service-result-head';
-      var name = document.createElement('span');
-      name.className = 'service-result-name';
-      name.textContent = result.service || result.name || t('streaming.service');
-      var statusEl = document.createElement('span');
-      statusEl.className = 'service-result-status';
-      statusEl.textContent = t('streaming.status.' + status);
-      head.appendChild(name);
-      head.appendChild(statusEl);
-      cardEl.appendChild(head);
-      var unlocked = P.statusClass(status) === 'ok';
-      var detailText = result.region || result.detail
-        || (unlocked && entry.region ? (entry.region.code || entry.region.name) : null);
-      if (detailText) {
-        var detail = document.createElement('p');
-        detail.textContent = detailText;
-        cardEl.appendChild(detail);
-      }
-      streamingResults.appendChild(cardEl);
+    if (!results || !results.length) {
+      streamingMessage.textContent = t('streaming.noData');
+      return;
+    }
+    // Split by address family; agents older than 0.7.3 send no proto and
+    // render flat (single implicit group).
+    var v4 = [], v6 = [], legacy = [];
+    results.forEach(function (r) {
+      if (r.proto === 'ipv6') v6.push(r);
+      else if (r.proto === 'ipv4') v4.push(r);
+      else legacy.push(r);
     });
-    if (!results || !results.length) streamingMessage.textContent = t('streaming.noData');
+
+    function renderGroup(list, title) {
+      if (!list.length) return;
+      var heading = document.createElement('p');
+      heading.className = 'streaming-proto-heading';
+      heading.textContent = title;
+      streamingResults.appendChild(heading);
+      list.forEach(function (result) {
+        var status = P.serviceStatus(result);
+        var cardEl = document.createElement('article');
+        cardEl.className = 'service-result ' + P.statusClass(status);
+        var head = document.createElement('div');
+        head.className = 'service-result-head';
+        var name = document.createElement('span');
+        name.className = 'service-result-name';
+        name.textContent = result.service || result.name || t('streaming.service');
+        var statusEl = document.createElement('span');
+        statusEl.className = 'service-result-status';
+        statusEl.textContent = t('streaming.status.' + status);
+        head.appendChild(name);
+        head.appendChild(statusEl);
+        cardEl.appendChild(head);
+        var unlocked = P.statusClass(status) === 'ok';
+        var detailText = result.region || result.detail
+          || (unlocked && entry.region ? (entry.region.code || entry.region.name) : null);
+        if (detailText) {
+          var detail = document.createElement('p');
+          detail.textContent = detailText;
+          cardEl.appendChild(detail);
+        }
+        streamingResults.appendChild(cardEl);
+      });
+    }
+
+    renderGroup(v4, t('streaming.ipv4'));
+    renderGroup(legacy, '');
+    if (v4.length || legacy.length) {
+      if (v6.length) {
+        renderGroup(v6, t('streaming.ipv6'));
+      } else {
+        // IPv4 results exist but no IPv6 rows at all: the agent has no IPv6
+        // egress and skipped the v6 pass (distinct from a failed check).
+        var notice = document.createElement('p');
+        notice.className = 'streaming-proto-heading streaming-no-v6';
+        notice.textContent = t('streaming.ipv6') + ' · ' + t('streaming.noIPv6');
+        streamingResults.appendChild(notice);
+      }
+    } else {
+      renderGroup(v6, t('streaming.ipv6'));
+    }
   }
 
   function loadStreaming() {
@@ -1635,6 +1941,7 @@
       var results = Array.isArray(body.results) ? body.results : [];
       entry.unlock = results;
       renderUnlock();
+      updateSpeedtestProtoOptions();
       streamingMessage.textContent = '';
       renderServiceResults(results);
     }).catch(function (error) {
@@ -1706,6 +2013,7 @@
       if (!entry) entry = { agent_id: hostId };
       entry.unlock = Array.isArray(msg.results) ? msg.results : [];
       renderAll();
+      updateSpeedtestProtoOptions();
       if (entry.unlock.length) {
         streamingMessage.textContent = '';
         renderServiceResults(entry.unlock);

@@ -38,7 +38,7 @@
   };
 
   // Streaming is managed from its own admin tab, so it's excluded here.
-  var FEATURE_NAMES = ['lg', 'mtr', 'iperf3', 'ping', 'tasks'];
+  var FEATURE_NAMES = ['lg', 'mtr', 'iperf3', 'ping', 'tasks', 'docker'];
 
   function node(tag, className, text) {
     var result = document.createElement(tag);
@@ -891,11 +891,14 @@
         var globalPct = (values[0] && values[0].iperf3_traffic_disable_pct) || '';
         var diagPerIp = (values[0] && values[0].diag_per_ip_minute) || '';
         var iperfHour = (values[0] && values[0].iperf3_per_agent_hour) || '';
+        var stPerIp = (values[0] && values[0].speedtest_per_ip_hour) || '';
+        var stLimitGb = (values[0] && values[0].speedtest_traffic_limit_gb) || '';
+        var stUsedBytes = (values[0] && values[0].speedtest_traffic_used_bytes) || 0;
         return Promise.all(adminAgents.map(function (agent) {
           return options.request('/api/admin/agents/' + agent.agent_id + '/features').then(function (detail) {
             return { agent: agent, detail: detail || {} };
           });
-        })).then(function (details) { return { defaults: defaults, globalPct: globalPct, diagPerIp: diagPerIp, iperfHour: iperfHour, details: details }; });
+        })).then(function (details) { return { defaults: defaults, globalPct: globalPct, diagPerIp: diagPerIp, iperfHour: iperfHour, stPerIp: stPerIp, stLimitGb: stLimitGb, stUsedBytes: stUsedBytes, details: details }; });
       }).then(function (data) {
         if (!active || currentView !== 'features') return;
         options.content.innerHTML = '';
@@ -914,6 +917,12 @@
         defaultsRoot.appendChild(diagPerIpField.el);
         var iperfHourField = inputField('feature.iperf3PerAgentHour', data.iperfHour, { type: 'number', min: 1, placeholder: '10' });
         defaultsRoot.appendChild(iperfHourField.el);
+        var stPerIpField = inputField('feature.speedtestPerIpHour', data.stPerIp, { type: 'number', min: 1, placeholder: '30' });
+        defaultsRoot.appendChild(stPerIpField.el);
+        var stLimitField = inputField('feature.speedtestTrafficGb', data.stLimitGb, { type: 'number', min: 1, step: 'any' });
+        defaultsRoot.appendChild(stLimitField.el);
+        var stUsed = node('p', 'inline-status', t('feature.speedtestTrafficUsed').replace('{used}', (Number(data.stUsedBytes) / 1e9).toFixed(2)));
+        defaultsRoot.appendChild(stUsed);
         var saveDefaults = actionButton(t('admin.save'), function () {
           var body = { features: {} };
           FEATURE_NAMES.forEach(function (feature) { body.features[feature] = defaultInputs[feature].checked; });
@@ -923,6 +932,10 @@
           body.diag_per_ip_minute = dpi === '' ? null : Number(dpi);
           var ih = iperfHourField.input.value.trim();
           body.iperf3_per_agent_hour = ih === '' ? null : Number(ih);
+          var sp = stPerIpField.input.value.trim();
+          body.speedtest_per_ip_hour = sp === '' ? null : Number(sp);
+          var sg = stLimitField.input.value.trim();
+          body.speedtest_traffic_limit_gb = sg === '' ? null : Number(sg);
           saveDefaults.disabled = true;
           defaultStatus.textContent = t('common.saving');
           options.request('/api/admin/features', {
@@ -1467,12 +1480,13 @@
             new Date(Number(r.ts) * 1000).toLocaleString(),
             r.agent || ('#' + r.agent_id),
             r.service,
+            r.proto === 'ipv6' ? t('streaming.ipv6') : t('streaming.ipv4'),
             node('span', 'streaming-history-status ' + window.Pharus.statusClass(status), t('streaming.status.' + status)),
             r.detail || '—'
           ];
         });
         options.content.appendChild(makeTable([
-          t('common.time'), t('common.agent'), t('streaming.service'), t('common.status'), t('iperfLog.target')
+          t('common.time'), t('common.agent'), t('streaming.service'), t('diag.speedtestProto'), t('common.status'), t('iperfLog.target')
         ], rows));
       }).catch(showError);
     }

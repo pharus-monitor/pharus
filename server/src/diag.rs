@@ -97,6 +97,177 @@ pub fn check_iperf3_agent_budget(state: &SharedState, agent_id: i64) -> Result<(
     Ok(())
 }
 
+const PING_VISITOR_PER_IP_MINUTE_DEFAULT: usize = 6;
+
+/// Per-visitor budget for the ping-visitor latency probe (separate bucket so
+/// speedtests and manual looking-glass runs don't starve each other).
+pub fn check_ping_visitor_budget(state: &SharedState, ip: &str) -> Result<(), DiagError> {
+    let limit = setting_usize(
+        state,
+        "ping_visitor_per_ip_minute",
+        PING_VISITOR_PER_IP_MINUTE_DEFAULT,
+    );
+    let mut map = state.ping_visitor_by_ip.lock().unwrap();
+    let cutoff = Instant::now() - Duration::from_secs(60);
+    map.retain(|_, v| {
+        v.retain(|t| *t > cutoff);
+        !v.is_empty()
+    });
+    let bucket = map.entry(ip.to_string()).or_default();
+    if bucket.len() >= limit {
+        return Err(DiagError::RateLimited);
+    }
+    bucket.push(Instant::now());
+    Ok(())
+}
+
+/// Buffer cap for a synchronously awaited diag output (ping text is tiny).
+const WAITER_BUF_MAX: usize = 8 * 1024;
+
+/// Outcome of a synchronous ping-visitor round, handed to the HTTP handler.
+pub struct PingOutcome {
+    pub rtt_min_ms: Option<f64>,
+    pub rtt_avg_ms: Option<f64>,
+}
+
+/// Dispatch a ping from `agent_id` to `target` and await the full output.
+/// The waiter is registered BEFORE the task is sent so a fast agent cannot
+/// beat the registration; every error path removes it again.
+pub async fn ping_visitor(
+    state: &SharedState,
+    ip: &str,
+    agent_id: i64,
+    target: &str,
+) -> Result<PingOutcome, DiagError> {
+    check_ping_visitor_budget(state, ip)?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let request_id = uuid::Uuid::new_v4().to_string();
+
+    if !valid_target(target) {
+        return Err(DiagError::BadTarget);
+    }
+    if !features::enabled(state, agent_id, "lg") {
+        return Err(DiagError::FeatureDisabled);
+    }
+    let agent_tx = {
+        let agents = state.agents.read().unwrap();
+        match agents.get(&agent_id) {
+            Some(a) if a.online => a.agent_tx.clone(),
+            _ => None,
+        }
+    };
+    let Some(agent_tx) = agent_tx else {
+        return Err(DiagError::AgentOffline);
+    };
+    {
+        let mut pending = state.diag_pending.lock().unwrap();
+        let cutoff = now() - PENDING_TTL;
+        pending.retain(|_, p| p.started >= cutoff);
+        if pending.len() >= MAX_IN_FLIGHT_TOTAL
+            || pending.values().filter(|p| p.agent_id == agent_id).count()
+                >= MAX_IN_FLIGHT_PER_AGENT
+        {
+            return Err(DiagError::TooManyRequests);
+        }
+        pending.insert(
+            request_id.clone(),
+            DiagPending {
+                agent_id,
+                kind: "ping".to_string(),
+                started: now(),
+                relayed: 0,
+            },
+        );
+    }
+    state
+        .diag_waiters
+        .lock()
+        .unwrap()
+        .insert(request_id.clone(), (String::new(), tx));
+
+    let sent = agent_tx.send(ServerToAgentMsg::RunTask {
+        task_id: request_id.clone(),
+        kind: TaskKind::Ping,
+        target: target.to_string(),
+        cycles: Some(4),
+        timeout: None,
+        extra: None,
+    });
+    if sent.is_err() {
+        state.diag_waiters.lock().unwrap().remove(&request_id);
+        state.diag_pending.lock().unwrap().remove(&request_id);
+        return Err(DiagError::AgentOffline);
+    }
+
+    let output = match tokio::time::timeout(Duration::from_secs(15), rx).await {
+        Ok(Ok(out)) => out,
+        _ => {
+            state.diag_waiters.lock().unwrap().remove(&request_id);
+            state.diag_pending.lock().unwrap().remove(&request_id);
+            return Err(DiagError::AgentOffline);
+        }
+    };
+    Ok(parse_ping_rtt(&output))
+}
+
+/// Feed one output frame into a registered waiter, if any. On `done` the
+/// waiter is completed with the collected stdout.
+pub fn feed_waiter(state: &SharedState, request_id: &str, stream: &str, data: &str, done: bool) {
+    let mut waiters = state.diag_waiters.lock().unwrap();
+    if let Some((buf, _)) = waiters.get_mut(request_id) {
+        if stream == "stdout" && buf.len() < WAITER_BUF_MAX {
+            buf.push_str(data);
+        }
+    }
+    if done {
+        if let Some((buf, tx)) = waiters.remove(request_id) {
+            let _ = tx.send(buf);
+        }
+    }
+}
+
+/// Parse RTT from ping output. Linux (LC_ALL=C): `rtt min/avg/max/mdev =
+/// 44.2/44.3/44.3/0.0 ms` or `round-trip min/avg/max/stddev = ...`; Windows:
+/// `Minimum = 44ms, Maximum = 45ms, Average = 44ms`.
+fn parse_ping_rtt(output: &str) -> PingOutcome {
+    let mut rtt_min = None;
+    let mut rtt_avg = None;
+    for line in output.lines() {
+        let l = line.trim();
+        if (l.starts_with("rtt ") || l.starts_with("round-trip")) && l.contains('=') {
+            if let Some(stats) = l.split('=').nth(1) {
+                let stats = stats.trim().trim_end_matches("ms").trim();
+                let parts: Vec<&str> = stats.split('/').collect();
+                if parts.len() >= 2 {
+                    rtt_min = parts[0].trim().parse::<f64>().ok();
+                    rtt_avg = parts[1].trim().parse::<f64>().ok();
+                }
+            }
+        }
+        if l.starts_with("Minimum") && l.contains("Average") {
+            for part in l.split(',') {
+                let part = part.trim();
+                if let Some(v) = part
+                    .strip_prefix("Minimum = ")
+                    .and_then(|s| s.trim_end_matches("ms").trim().parse::<f64>().ok())
+                {
+                    rtt_min = Some(v);
+                }
+                if let Some(v) = part
+                    .strip_prefix("Average = ")
+                    .and_then(|s| s.trim_end_matches("ms").trim().parse::<f64>().ok())
+                {
+                    rtt_avg = Some(v);
+                }
+            }
+        }
+    }
+    PingOutcome {
+        rtt_min_ms: rtt_min,
+        rtt_avg_ms: rtt_avg,
+    }
+}
+
 /// The target is passed to `ping`/`traceroute`/`mtr` as an argv entry, so shell
 /// metacharacters cannot escape — but a leading `-` would still be read as a
 /// flag. Restrict to what a hostname or IP literal can contain.
@@ -396,6 +567,9 @@ pub fn relay_output(
     done: bool,
     exit_code: Option<i32>,
 ) {
+    // Synchronous waiters (ping-visitor) consume the same frames regardless
+    // of browser relay state.
+    feed_waiter(state, &request_id, &stream, &data, done);
     let Some((kind, over_budget)) =
         take_pending_bytes(state, &request_id, agent_id, done, data.len())
     else {
@@ -547,7 +721,7 @@ pub fn start_speedtest(
     });
     // Speedtest uses the Pharus server itself as the target, so we pass an
     // empty target that passes valid_target (a bare hostname is fine).
-    dispatch(state, ip, agent_id, "speedtest", "speedtest", TaskKind::Speedtest, "-", None, Some(extra))
+    dispatch(state, ip, agent_id, "speedtest", "speedtest", TaskKind::Speedtest, "_", None, Some(extra))
 }
 
 /// Relay the final structured speedtest result to the requesting browser.

@@ -156,10 +156,11 @@ pub fn init(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS streaming_results (
           agent_id INTEGER NOT NULL,
           service  TEXT NOT NULL,
+          proto    TEXT NOT NULL DEFAULT 'ipv4',
           status   TEXT NOT NULL,
           detail   TEXT,
           ts       INTEGER NOT NULL,
-          PRIMARY KEY (agent_id, service)
+          PRIMARY KEY (agent_id, service, proto)
         );
 
         CREATE TABLE IF NOT EXISTS themes (
@@ -178,6 +179,7 @@ pub fn init(conn: &Connection) -> Result<()> {
           id       INTEGER PRIMARY KEY AUTOINCREMENT,
           agent_id INTEGER NOT NULL,
           service  TEXT NOT NULL,
+          proto    TEXT NOT NULL DEFAULT 'ipv4',
           status   TEXT NOT NULL,
           detail   TEXT,
           ts       INTEGER NOT NULL
@@ -201,7 +203,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -329,6 +331,29 @@ fn migrate(conn: &Connection) -> Result<()> {
         // Multi-user: role (admin/viewer) and account disable switch.
         add_column(conn, "users", "role", "TEXT NOT NULL DEFAULT 'admin'")?;
         add_column(conn, "users", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
+    }
+    if version < 16 {
+        // Streaming results gain an address-family dimension: same service can
+        // be checked over IPv4 and IPv6 independently. The primary key changes
+        // from (agent_id, service) to (agent_id, service, proto), which SQLite
+        // cannot alter in place — rebuild the table and carry existing rows
+        // over as ipv4 (they were measured before dual-stack existed).
+        conn.execute_batch(
+            "CREATE TABLE streaming_results_new (
+               agent_id INTEGER NOT NULL,
+               service  TEXT NOT NULL,
+               proto    TEXT NOT NULL DEFAULT 'ipv4',
+               status   TEXT NOT NULL,
+               detail   TEXT,
+               ts       INTEGER NOT NULL,
+               PRIMARY KEY (agent_id, service, proto)
+             );
+             INSERT INTO streaming_results_new (agent_id, service, proto, status, detail, ts)
+               SELECT agent_id, service, 'ipv4', status, detail, ts FROM streaming_results;
+             DROP TABLE streaming_results;
+             ALTER TABLE streaming_results_new RENAME TO streaming_results;",
+        )?;
+        add_column(conn, "streaming_history", "proto", "TEXT NOT NULL DEFAULT 'ipv4'")?;
     }
     conn.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
     Ok(())
@@ -1213,13 +1238,21 @@ pub fn make_region(code: &str, source: &str) -> Region {
 
 pub fn replace_streaming(conn: &Connection, agent_id: i64, results: &[UnlockResult]) -> Result<()> {
     let ts = now_ts();
+    // Each Unlock message carries the agent's complete current set, so replace
+    // wholesale: rows a new batch no longer reports (e.g. the IPv6 pass being
+    // dropped on a host that lost IPv6) must disappear rather than linger as
+    // stale state forever.
+    conn.execute(
+        "DELETE FROM streaming_results WHERE agent_id = ?1",
+        params![agent_id],
+    )?;
     for r in results {
+        // Agents older than 0.7.3 send no proto; their probes were IPv4-only.
+        let proto = r.proto.as_deref().unwrap_or("ipv4");
         conn.execute(
-            "INSERT INTO streaming_results (agent_id, service, status, detail, ts)
-             VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(agent_id, service) DO UPDATE SET
-               status = excluded.status, detail = excluded.detail, ts = excluded.ts",
-            params![agent_id, r.service, r.status, r.detail, ts],
+            "INSERT INTO streaming_results (agent_id, service, proto, status, detail, ts)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![agent_id, r.service, proto, r.status, r.detail, ts],
         )?;
     }
     Ok(())
@@ -1227,8 +1260,8 @@ pub fn replace_streaming(conn: &Connection, agent_id: i64, results: &[UnlockResu
 
 pub fn list_streaming(conn: &Connection, agent_id: i64) -> Result<Vec<UnlockResult>> {
     let mut stmt = conn.prepare(
-        "SELECT service, status, detail FROM streaming_results
-         WHERE agent_id = ?1 ORDER BY service",
+        "SELECT service, status, detail, proto FROM streaming_results
+         WHERE agent_id = ?1 ORDER BY service, proto",
     )?;
     let rows = stmt
         .query_map(params![agent_id], |r| {
@@ -1236,6 +1269,7 @@ pub fn list_streaming(conn: &Connection, agent_id: i64) -> Result<Vec<UnlockResu
                 service: r.get(0)?,
                 status: r.get(1)?,
                 detail: r.get(2)?,
+                proto: Some(r.get(3)?),
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1245,6 +1279,7 @@ pub fn list_streaming(conn: &Connection, agent_id: i64) -> Result<Vec<UnlockResu
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StreamingHistoryRow {
     pub service: String,
+    pub proto: String,
     pub status: String,
     pub detail: Option<String>,
     pub ts: i64,
@@ -1260,10 +1295,11 @@ pub fn append_streaming_history(
 ) -> Result<()> {
     let now = now_ts();
     for r in results {
+        let proto = r.proto.as_deref().unwrap_or("ipv4");
         conn.execute(
-            "INSERT INTO streaming_history (agent_id, service, status, detail, ts)
-             VALUES (?1,?2,?3,?4,?5)",
-            params![agent_id, r.service, r.status, r.detail, now],
+            "INSERT INTO streaming_history (agent_id, service, proto, status, detail, ts)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![agent_id, r.service, proto, r.status, r.detail, now],
         )?;
     }
     let cutoff = now - 30 * 86_400;
@@ -1291,7 +1327,7 @@ pub fn list_streaming_history(
     limit: i64,
 ) -> Result<Vec<StreamingHistoryRow>> {
     let mut stmt = conn.prepare(
-        "SELECT service, status, detail, ts FROM streaming_history
+        "SELECT service, status, detail, ts, proto FROM streaming_history
          WHERE agent_id = ?1 AND ts >= ?2
          ORDER BY ts DESC LIMIT ?3",
     )?;
@@ -1302,6 +1338,7 @@ pub fn list_streaming_history(
                 status: r.get(1)?,
                 detail: r.get(2)?,
                 ts: r.get(3)?,
+                proto: r.get(4)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1314,7 +1351,7 @@ pub fn list_streaming_history_all(
     limit: i64,
 ) -> Result<Vec<(i64, StreamingHistoryRow)>> {
     let mut stmt = conn.prepare(
-        "SELECT agent_id, service, status, detail, ts FROM streaming_history
+        "SELECT agent_id, service, status, detail, ts, proto FROM streaming_history
          ORDER BY ts DESC LIMIT ?1",
     )?;
     let rows = stmt
@@ -1326,6 +1363,7 @@ pub fn list_streaming_history_all(
                     status: r.get(2)?,
                     detail: r.get(3)?,
                     ts: r.get(4)?,
+                    proto: r.get(5)?,
                 },
             ))
         })?

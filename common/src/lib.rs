@@ -219,6 +219,10 @@ pub struct UnlockResult {
     /// "yes" | "no" | "fail"
     pub status: String,
     pub detail: Option<String>,
+    /// Address family this result was measured over: "ipv4" | "ipv6".
+    /// Absent on agents older than 0.7.3; the server treats it as ipv4.
+    #[serde(default)]
+    pub proto: Option<String>,
 }
 
 /// A Docker container running on the agent host (best effort; absent on hosts
@@ -385,6 +389,11 @@ pub enum ServerToAgentMsg {
     TasksSync {
         ping_tasks: Vec<PingTaskSpec>,
         custom_tasks: Vec<CustomTaskSpec>,
+        /// The agent's effective feature set, pushed since 0.7.5. `None` on
+        /// older servers (agent treats everything as enabled); `Some([])`
+        /// means the admin explicitly turned everything off.
+        #[serde(default)]
+        features: Option<Vec<String>>,
     },
     /// Ask the agent to download, verify and swap in a new binary, then
     /// restart itself. `kind` is "exe" (Windows raw binary) or "tar_gz"

@@ -1,7 +1,7 @@
 //! Public read-only API plus the diagnostics trigger endpoints.
 
 use crate::state::SharedState;
-use crate::{db, diag, features, regions};
+use crate::{db, diag, features, regions, speedtest};
 use axum::{
     extract::{Path, Query, Request, State},
     http::StatusCode,
@@ -169,6 +169,19 @@ async fn take_json<T: serde::de::DeserializeOwned>(
 }
 
 pub fn router() -> Router<SharedState> {
+    // The speedtest endpoints are fetched cross-origin when the page is served
+    // through a CDN hostname but the test targets the direct server URL.
+    let speedtest_cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers([axum::http::header::CONTENT_TYPE]);
+
+    let speedtest_routes = Router::new()
+        .route("/api/speedtest/download", get(speedtest_download))
+        .route("/api/speedtest/upload", post(speedtest_upload))
+        .route("/api/speedtest/ping", get(speedtest_ping))
+        .layer(speedtest_cors);
+
     Router::new()
         .route("/api/meta", get(meta))
         .route("/api/regions", get(region_list))
@@ -179,8 +192,9 @@ pub fn router() -> Router<SharedState> {
         .route("/api/diag/mtr", post(diag_mtr))
         .route("/api/diag/iperf3", post(diag_iperf3))
         .route("/api/diag/speedtest", post(diag_speedtest))
-        .route("/api/speedtest/download", get(speedtest_download))
-        .route("/api/speedtest/upload", post(speedtest_upload))
+        .route("/api/agents/:id/ping-visitor", post(ping_visitor))
+        .route("/api/server-ip", get(server_ip))
+        .merge(speedtest_routes)
 }
 
 /// Newest-first row cap, chosen so a 7 day window at the 60s history interval
@@ -198,6 +212,81 @@ fn range_seconds(range: Option<&str>) -> i64 {
 
 fn now() -> i64 {
     crate::state::now()
+}
+
+/// Derive a family-pinned base URL from the speedtest base by swapping the
+/// hostname's `v4.` / `v6.` label (those subdomains carry A-only / AAAA-only
+/// DNS records, forcing the client onto the chosen address family). Handles
+/// both a bare host (prefix added) and an already family-pinned host (label
+/// replaced). Bare-IP bases have no family subdomains and yield `None`.
+fn family_base(base: &str, family: &str) -> Option<String> {
+    let (scheme, rest) = base.split_once("://")?;
+    let (host_port, suffix) = match rest.split_once('/') {
+        Some((h, p)) => (h, format!("/{p}")),
+        None => (rest, String::new()),
+    };
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h, Some(p)),
+        _ => (host_port, None),
+    };
+    // Bracketed IPv6 literals: strip the brackets before parsing.
+    let host_bare = host.trim_matches(['[', ']']);
+    if host_bare.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+    let stripped = host
+        .strip_prefix("v4.")
+        .or_else(|| host.strip_prefix("v6."))
+        .unwrap_or(host);
+    let mut out = format!("{scheme}://{family}.{stripped}");
+    if let Some(p) = port {
+        out.push(':');
+        out.push_str(p);
+    }
+    out.push_str(&suffix);
+    Some(out)
+}
+
+/// Return the direct speedtest base URL for CDN bypass.
+/// Priority: `speedtest_base` setting (full URL, e.g. https://direct.example.com)
+/// > `server_ip` setting (plain IP, joined as http://ip:8080) > none (same-origin).
+async fn server_ip(
+    State(state): State<SharedState>,
+    _req: Request,
+) -> Json<serde_json::Value> {
+    let (base, ip) = {
+        let conn = state.db.lock().unwrap();
+        let base = db::get_setting(&conn, "speedtest_base")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
+        let ip = db::get_setting(&conn, "server_ip")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
+        (base, ip)
+    };
+
+    // speedtest_base wins; fall back to http://<server_ip>:8080
+    let url = base.clone().or_else(|| ip.map(|ip| format!("http://{ip}:8080")));
+    let (v4, v6) = match url.as_deref() {
+        Some(u) => (family_base(u, "v4"), family_base(u, "v6")),
+        None => (None, None),
+    };
+
+    // Computed live so the frontend can disable the test as soon as the
+    // monthly quota runs out.
+    let quota_exceeded = {
+        let conn = state.db.lock().unwrap();
+        speedtest::quota_exceeded(&conn).unwrap_or(false)
+    };
+
+    Json(serde_json::json!({
+        "base": url,
+        "base_v4": v4,
+        "base_v6": v6,
+        "quota_exceeded": quota_exceeded
+    }))
 }
 
 async fn meta(State(state): State<SharedState>) -> Response {
@@ -382,6 +471,80 @@ async fn diag_lg(State(state): State<SharedState>, req: Request) -> Response {
     diag_response(diag::start_lg(&state, &ip, body.agent_id, &body.kind, &body.target))
 }
 
+/// Latency probe used by the browser speedtest: the agent pings the VISITOR's
+/// own public IP (taken from the request, never from a parameter, so the
+/// endpoint cannot be turned into a third-party probe) and the RTT is
+/// returned synchronously. Route is symmetric for our purposes: it reads as
+/// "visitor ↔ this node" latency.
+async fn ping_visitor(
+    State(state): State<SharedState>,
+    Path(agent_id): Path<i64>,
+    req: Request,
+) -> Response {
+    let ip = client_ip(&state, &req);
+    // Only public unicast addresses may be pinged — private/loopback/link-
+    // local/multicast would measure nothing meaningful and could poke at
+    // internal networks behind the node.
+    let Ok(addr) = ip.parse::<std::net::IpAddr>() else {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "无法确定访客地址");
+    };
+    fn public_v4(v4: &std::net::Ipv4Addr) -> bool {
+        let o = v4.octets();
+        !(v4.is_private() || v4.is_loopback() || v4.is_link_local()
+            || v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified()
+            // CGNAT 100.64.0.0/10
+            || (o[0] == 100 && (o[1] & 0xC0) == 64)
+            // 0.0.0.0/8 "this network", 240.0.0.0/4 reserved
+            || o[0] == 0 || o[0] >= 240
+            // documentation 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24
+            || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+            || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+            || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+            // benchmarking 198.18.0.0/15
+            || (o[0] == 198 && (o[1] & 0xFE) == 18))
+    }
+    let public = match addr {
+        std::net::IpAddr::V4(ref v4) => public_v4(v4),
+        std::net::IpAddr::V6(ref v6) => {
+            // An IPv4-mapped IPv6 address routes as IPv4 — validate it as one.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                public_v4(&mapped)
+            } else {
+                let s = v6.segments();
+                !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast()
+                    // ULA fc00::/7, link-local fe80::/10
+                    || (s[0] & 0xfe00) == 0xfc00
+                    || (s[0] & 0xffc0) == 0xfe80
+                    // documentation 2001:db8::/32
+                    || (s[0] == 0x2001 && s[1] == 0x0db8)
+                    // NAT64 64:ff9b::/96, discard-only 100::/64
+                    || (s[0] == 0x0064 && s[1] == 0xff9b)
+                    || (s[0] == 0x0100 && s[1] == 0 && s[2] == 0 && s[3] == 0))
+            }
+        }
+    };
+    if !public {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "访客地址不可用于延迟探测");
+    }
+    match diag::ping_visitor(&state, &ip, agent_id, &ip).await {
+        Ok(outcome) => Json(serde_json::json!({
+            "rtt_min_ms": outcome.rtt_min_ms,
+            "rtt_avg_ms": outcome.rtt_avg_ms,
+            "reachable": outcome.rtt_min_ms.is_some(),
+        }))
+        .into_response(),
+        Err(diag::DiagError::FeatureDisabled) => err(StatusCode::FORBIDDEN, "该功能已被管理员关闭"),
+        Err(diag::DiagError::AgentOffline) => err(StatusCode::CONFLICT, "节点当前离线"),
+        Err(diag::DiagError::BadTarget) => err(StatusCode::UNPROCESSABLE_ENTITY, "目标地址不合法"),
+        Err(diag::DiagError::TooManyRequests) => {
+            err(StatusCode::TOO_MANY_REQUESTS, "诊断请求过于频繁，请稍后再试")
+        }
+        Err(diag::DiagError::RateLimited) => {
+            err(StatusCode::TOO_MANY_REQUESTS, "请求频率超限，请稍后再试")
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MtrRequest {
     agent_id: i64,
@@ -463,8 +626,40 @@ async fn diag_speedtest(State(state): State<SharedState>, req: Request) -> Respo
     diag_response(diag::start_speedtest(&state, &ip, body.agent_id, size, &direction))
 }
 
+/// Admission control shared by the speedtest data endpoints: monthly quota
+/// (fail closed when unreadable), per-IP hourly budget, global concurrency
+/// cap. On success returns the in-flight permit the caller must hold for the
+/// duration of the transfer.
+fn speedtest_admission(
+    state: &SharedState,
+    req: &Request,
+) -> Result<speedtest::InflightPermit, Response> {
+    let exceeded = {
+        let conn = state.db.lock().unwrap();
+        speedtest::quota_exceeded(&conn)
+    };
+    match exceeded {
+        Ok(true) => return Err(err(StatusCode::FORBIDDEN, "quota_exceeded")),
+        Ok(false) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "speedtest quota check failed");
+            return Err(err(StatusCode::SERVICE_UNAVAILABLE, "quota check failed"));
+        }
+    }
+    let ip = client_ip(state, req);
+    if !speedtest::check_ip_budget(state, &ip) {
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
+    }
+    speedtest::acquire_inflight(state)
+        .ok_or_else(|| err(StatusCode::TOO_MANY_REQUESTS, "too many concurrent tests"))
+}
+
 /// Download endpoint for built-in speedtest: streams random data to the agent.
-async fn speedtest_download(req: Request) -> Response {
+async fn speedtest_download(State(state): State<SharedState>, req: Request) -> Response {
+    let permit = match speedtest_admission(&state, &req) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
     let size: u64 = req
         .uri()
         .query()
@@ -476,14 +671,43 @@ async fn speedtest_download(req: Request) -> Response {
         .unwrap_or(10_485_760)
         .clamp(1_048_576, 104_857_600);
 
+    // Actually-sent bytes are flushed to the monthly counter when the body
+    // stream ends — completed, aborted by the client, or errored.
+    struct FlushOnDrop {
+        state: SharedState,
+        sent: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        _permit: speedtest::InflightPermit,
+    }
+    impl Drop for FlushOnDrop {
+        fn drop(&mut self) {
+            speedtest::add_bytes(
+                &self.state,
+                self.sent.load(std::sync::atomic::Ordering::Relaxed),
+            );
+        }
+    }
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let flush = FlushOnDrop {
+        state: state.clone(),
+        sent: sent.clone(),
+        _permit: permit,
+    };
+
     let stream = async_stream::stream! {
+        // Owns the flush guard: it drops with the stream in every exit path.
+        let _flush = flush;
+        // One pre-generated random chunk, reused by reference: per-byte RNG in
+        // the hot path caps throughput well below what the network can do.
+        let chunk_size = 262_144u64;
+        let mut buf = vec![0u8; chunk_size as usize];
+        rand::Rng::fill(&mut rand::thread_rng(), &mut buf[..]);
+        let chunk = axum::body::Bytes::from(buf);
         let mut remaining = size;
-        let chunk_size = 65_536u64;
         while remaining > 0 {
             let len = remaining.min(chunk_size) as usize;
-            let chunk: Vec<u8> = (0..len).map(|_| rand::random::<u8>()).collect();
             remaining -= len as u64;
-            yield Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(chunk));
+            sent.fetch_add(len as u64, std::sync::atomic::Ordering::Relaxed);
+            yield Ok::<_, std::convert::Infallible>(chunk.slice(..len));
         }
     };
 
@@ -496,8 +720,38 @@ async fn speedtest_download(req: Request) -> Response {
         .unwrap()
 }
 
+/// Latency probe for the built-in speedtest: empty response, CORS-enabled.
+async fn speedtest_ping(State(state): State<SharedState>) -> Response {
+    let exceeded = {
+        let conn = state.db.lock().unwrap();
+        speedtest::quota_exceeded(&conn)
+    };
+    match exceeded {
+        Ok(true) => err(StatusCode::FORBIDDEN, "quota_exceeded"),
+        Ok(false) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "speedtest quota check failed");
+            err(StatusCode::SERVICE_UNAVAILABLE, "quota check failed")
+        }
+    }
+}
+
 /// Upload endpoint for built-in speedtest: receives and discards the body.
-async fn speedtest_upload(req: Request) -> Response {
+async fn speedtest_upload(State(state): State<SharedState>, req: Request) -> Response {
+    let _permit = match speedtest_admission(&state, &req) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    // Reject oversized bodies up front when the length is known.
+    if req
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some_and(|len| len > speedtest::UPLOAD_MAX_BYTES)
+    {
+        return err(StatusCode::PAYLOAD_TOO_LARGE, "payload too large");
+    }
     let start = std::time::Instant::now();
     let body = req.into_body();
     let mut bytes_received: u64 = 0;
@@ -505,15 +759,58 @@ async fn speedtest_upload(req: Request) -> Response {
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
         match chunk {
-            Ok(data) => bytes_received += data.len() as u64,
+            Ok(data) => {
+                bytes_received += data.len() as u64;
+                // Chunked/smuggled bodies can dodge the Content-Length
+                // pre-check, so enforce the cap while streaming too.
+                if bytes_received > speedtest::UPLOAD_MAX_BYTES {
+                    return err(StatusCode::PAYLOAD_TOO_LARGE, "payload too large");
+                }
+            }
             Err(_) => break,
         }
     }
 
+    speedtest::add_bytes(&state, bytes_received);
     let elapsed_ms = start.elapsed().as_millis() as u64;
     axum::Json(serde_json::json!({
         "bytes": bytes_received,
         "elapsed_ms": elapsed_ms,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::family_base;
+
+    #[test]
+    fn bare_host_gets_family_prefix() {
+        assert_eq!(
+            family_base("https://speedtest.example.com", "v4"),
+            Some("https://v4.speedtest.example.com".into())
+        );
+        assert_eq!(
+            family_base("https://speedtest.example.com", "v6"),
+            Some("https://v6.speedtest.example.com".into())
+        );
+    }
+
+    #[test]
+    fn family_label_is_swapped_not_double_prefixed() {
+        assert_eq!(
+            family_base("https://v4.speedtest.example.com", "v6"),
+            Some("https://v6.speedtest.example.com".into())
+        );
+        assert_eq!(
+            family_base("https://v6.speedtest.example.com", "v4"),
+            Some("https://v4.speedtest.example.com".into())
+        );
+    }
+
+    #[test]
+    fn ip_literals_have_no_family_domain() {
+        assert_eq!(family_base("http://82.22.31.35:8080", "v4"), None);
+        assert_eq!(family_base("http://[2001:db8::1]:8080", "v6"), None);
+    }
 }

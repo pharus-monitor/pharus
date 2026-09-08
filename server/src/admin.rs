@@ -933,6 +933,9 @@ async fn global_features(State(state): State<SharedState>) -> Response {
             "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold_global(&conn).ok().flatten(),
             "diag_per_ip_minute": setting("diag_per_ip_minute"),
             "iperf3_per_agent_hour": setting("iperf3_per_agent_hour"),
+            "speedtest_per_ip_hour": setting("speedtest_per_ip_hour"),
+            "speedtest_traffic_limit_gb": setting("speedtest_traffic_limit_gb"),
+            "speedtest_traffic_used_bytes": crate::speedtest::month_usage(&conn).unwrap_or(0),
         }))
         .into_response(),
         Err(e) => db_err(e),
@@ -949,6 +952,10 @@ struct GlobalFeaturesBody {
     diag_per_ip_minute: Option<usize>,
     #[serde(default)]
     iperf3_per_agent_hour: Option<usize>,
+    #[serde(default)]
+    speedtest_per_ip_hour: Option<usize>,
+    #[serde(default)]
+    speedtest_traffic_limit_gb: Option<f64>,
 }
 
 async fn set_global_features(
@@ -965,8 +972,12 @@ async fn set_global_features(
     }
     if body.diag_per_ip_minute.is_some_and(|v| v == 0)
         || body.iperf3_per_agent_hour.is_some_and(|v| v == 0)
+        || body.speedtest_per_ip_hour.is_some_and(|v| v == 0)
     {
         return bad("diag limits must be positive integers");
+    }
+    if body.speedtest_traffic_limit_gb.is_some_and(|v| !(v > 0.0 && v.is_finite())) {
+        return bad("speedtest_traffic_limit_gb must be a positive number");
     }
     {
         let conn = state.db.lock().unwrap();
@@ -981,6 +992,7 @@ async fn set_global_features(
         for (key, val) in [
             ("diag_per_ip_minute", body.diag_per_ip_minute),
             ("iperf3_per_agent_hour", body.iperf3_per_agent_hour),
+            ("speedtest_per_ip_hour", body.speedtest_per_ip_hour),
         ] {
             if let Some(v) = val {
                 if let Err(e) = db::set_setting(&conn, key, &v.to_string()) {
@@ -988,6 +1000,18 @@ async fn set_global_features(
                 }
             } else if let Err(e) = db::clear_setting(&conn, key) {
                 return db_err(e);
+            }
+        }
+        match body.speedtest_traffic_limit_gb {
+            Some(v) => {
+                if let Err(e) = db::set_setting(&conn, "speedtest_traffic_limit_gb", &v.to_string()) {
+                    return db_err(e);
+                }
+            }
+            None => {
+                if let Err(e) = db::clear_setting(&conn, "speedtest_traffic_limit_gb") {
+                    return db_err(e);
+                }
             }
         }
     }
@@ -1000,6 +1024,9 @@ async fn set_global_features(
             "iperf3_traffic_disable_pct": features::iperf3_traffic_threshold_global(&conn).ok().flatten(),
             "diag_per_ip_minute": setting("diag_per_ip_minute"),
             "iperf3_per_agent_hour": setting("iperf3_per_agent_hour"),
+            "speedtest_per_ip_hour": setting("speedtest_per_ip_hour"),
+            "speedtest_traffic_limit_gb": setting("speedtest_traffic_limit_gb"),
+            "speedtest_traffic_used_bytes": crate::speedtest::month_usage(&conn).unwrap_or(0),
         }))
         .into_response(),
         Err(e) => db_err(e),
@@ -2162,6 +2189,7 @@ async fn streaming_log(
                         "agent": names.get(&agent_id).cloned()
                             .unwrap_or_else(|| format!("Agent #{agent_id}")),
                         "service": r.service,
+                        "proto": r.proto,
                         "status": r.status,
                         "detail": r.detail,
                         "ts": r.ts,

@@ -8,6 +8,7 @@ mod diag;
 mod features;
 mod notify;
 mod regions;
+mod speedtest;
 mod state;
 mod themes;
 mod updates;
@@ -246,6 +247,10 @@ async fn serve(
         diag_pending: Mutex::new(HashMap::new()),
         diag_by_ip: Mutex::new(HashMap::new()),
         iperf3_by_agent: Mutex::new(HashMap::new()),
+        speedtest_by_ip: Mutex::new(HashMap::new()),
+        speedtest_inflight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ping_visitor_by_ip: Mutex::new(HashMap::new()),
+        diag_waiters: Mutex::new(HashMap::new()),
         update_cache: Mutex::new(None),
         theme_store_cache: Mutex::new(None),
         term_sessions: Mutex::new(HashMap::new()),

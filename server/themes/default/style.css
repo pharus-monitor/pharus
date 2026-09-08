@@ -437,6 +437,9 @@ tr.drop-target td { border-top-color: transparent; }
 .service-result.ok .service-result-status { color: var(--ok); }
 .service-result.crit .service-result-status { color: #f87171; }
 .service-result p { margin: 0.35rem 0 0; font-size: 10px; color: var(--text-muted); }
+.streaming-proto-heading { grid-column: 1 / -1; margin: 0.5rem 0 0.3rem; font: 600 10px/1.4 var(--font-mono); letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase; }
+.streaming-proto-heading:first-child { margin-top: 0; }
+.streaming-no-v6 { opacity: 0.7; text-transform: none; letter-spacing: 0.02em; }
 
 /* ---------- Admin ---------- */
 .header-right { display: flex; align-items: center; gap: 8px; }
@@ -926,6 +929,7 @@ select:focus { outline: none; border-color: var(--beacon-500); }
 .site-footer a:hover { text-decoration: underline; }
 
 /* ---------- Speedtest chart ---------- */
+.speedtest-controls { display: flex; align-items: flex-end; gap: 0.9rem; flex-wrap: wrap; }
 .speedtest-chart-container {
   position: relative;
   width: 100%;
@@ -951,6 +955,14 @@ select:focus { outline: none; border-color: var(--beacon-500); }
   text-align: center;
   z-index: 10;
   pointer-events: none;
+}
+
+.speedtest-phase {
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 8px;
+  min-height: 20px;
 }
 
 .speedtest-gauge {

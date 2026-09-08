@@ -445,6 +445,12 @@
       ev.stopPropagation();
       if (sel.disabled) return;
       var openNow = menu.style.display !== 'none';
+      // stopPropagation keeps this click from reaching the document-level
+      // closer, so close every other open dropdown here or two menus can
+      // stay open at the same time.
+      for (var i = 0; i < SELECT_STATES.length; i++) {
+        if (SELECT_STATES[i] !== st) SELECT_STATES[i].close();
+      }
       close();
       if (!openNow) open();
     });

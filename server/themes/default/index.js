@@ -142,6 +142,9 @@
     entry.unlock.forEach(function (result) {
       var status = P.serviceStatus(result);
       var label = result.service || result.name || t('streaming.service');
+      // Dual-stack agents report each service once per address family.
+      if (result.proto === 'ipv6') label += ' · ' + t('streaming.ipv6');
+      else if (result.proto === 'ipv4') label += ' · ' + t('streaming.ipv4');
       var unlocked = P.statusClass(status) === 'ok';
       var detail = result.region || result.detail
         || (unlocked && entry.region ? (entry.region.code || entry.region.name) : t('streaming.status.' + status));
