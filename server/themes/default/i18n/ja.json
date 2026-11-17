@@ -407,5 +407,10 @@
   "footer.rights": "· 軽量サーバー監視",
   "admin.rename": "ホスト名を変更",
   "admin.name": "ホスト名",
-  "admin.editBilling": "請求を編集"
+  "admin.editBilling": "請求を編集",
+  "update.triggerAll": "一括更新",
+  "update.triggerAllConfirm": "{n} 個のノードを順次更新しますか？各ノードは一時的にオフラインになります。",
+  "update.allUpToDate": "すべて最新です",
+  "update.triggering": "{name} を更新中（{i}/{n}）…",
+  "update.triggerAllDone": "{n} 個のノードの更新を開始しました"
 }

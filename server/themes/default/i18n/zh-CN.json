@@ -407,5 +407,10 @@
   "footer.rights": "· 轻量服务器监控",
   "admin.rename": "修改主机名",
   "admin.name": "主机名",
-  "admin.editBilling": "编辑账单"
+  "admin.editBilling": "编辑账单",
+  "update.triggerAll": "全部更新",
+  "update.triggerAllConfirm": "确定依次更新 {n} 个节点？更新期间各节点将短暂离线。",
+  "update.allUpToDate": "全部已是最新版本",
+  "update.triggering": "正在更新 {name}（{i}/{n}）…",
+  "update.triggerAllDone": "已触发 {n} 个节点更新"
 }

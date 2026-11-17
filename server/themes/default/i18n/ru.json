@@ -407,5 +407,10 @@
   "footer.rights": "· лёгкий мониторинг серверов",
   "admin.rename": "Переименовать хост",
   "admin.name": "Имя хоста",
-  "admin.editBilling": "Изменить биллинг"
+  "admin.editBilling": "Изменить биллинг",
+  "update.triggerAll": "Обновить все",
+  "update.triggerAllConfirm": "Обновить {n} узлов по очереди? Каждый узел ненадолго отключится.",
+  "update.allUpToDate": "Все агенты обновлены",
+  "update.triggering": "Обновление {name} ({i}/{n})…",
+  "update.triggerAllDone": "Запущено обновление {n} узлов"
 }

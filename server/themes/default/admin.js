@@ -1694,6 +1694,48 @@
           return;
         }
 
+        // bulk update: trigger every online agent behind the latest version
+        var latestVersion = versions.reduce(function (m, v) {
+          return !m || versionGt(v.version, m) ? v.version : m;
+        }, null);
+        var outdated = agents.filter(function (a) {
+          return a.online && (!a.app_version || (latestVersion && versionGt(latestVersion, a.app_version)));
+        });
+        var allBox = node('div', 'feature-defaults');
+        var allStatus = node('span', 'inline-status');
+        var allBtn = actionButton(t('update.triggerAll'), function () {
+          if (!outdated.length) {
+            allStatus.textContent = t('update.allUpToDate');
+            return;
+          }
+          var label = outdated.map(function (a) { return a.name || ('Agent #' + a.agent_id); }).join(', ');
+          if (!window.confirm(t('update.triggerAllConfirm').replace('{n}', outdated.length) + '\n' + label)) return;
+          allBtn.disabled = true;
+          var i = 0;
+          var next = function () {
+            if (i >= outdated.length) {
+              allStatus.textContent = t('update.triggerAllDone').replace('{n}', outdated.length);
+              allBtn.disabled = false;
+              return;
+            }
+            var a = outdated[i++];
+            allStatus.textContent = t('update.triggering')
+              .replace('{name}', a.name || ('Agent #' + a.agent_id))
+              .replace('{i}', i).replace('{n}', outdated.length);
+            options.request('/api/admin/agents/' + a.agent_id + '/update', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ version: latestVersion })
+            }).catch(function (e) {
+              allStatus.textContent = t('common.error') + ': ' + (a.name || a.agent_id) + ' — ' + e.message;
+            }).then(function () { setTimeout(next, 3000); });
+          };
+          next();
+        }, 'btn primary');
+        allBox.appendChild(allBtn);
+        allBox.appendChild(allStatus);
+        options.content.appendChild(allBox);
+
         var rows = agents.map(function (agent) {
           var run = actionButton(t('update.trigger'), function () {
             if (!agent.online) {

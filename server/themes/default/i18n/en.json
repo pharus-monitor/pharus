@@ -407,5 +407,10 @@
   "footer.rights": "· lightweight server monitoring",
   "admin.rename": "Rename host",
   "admin.name": "Host name",
-  "admin.editBilling": "Edit billing"
+  "admin.editBilling": "Edit billing",
+  "update.triggerAll": "Update all",
+  "update.triggerAllConfirm": "Update {n} agents one by one? Each node goes offline briefly.",
+  "update.allUpToDate": "All agents are up to date",
+  "update.triggering": "Updating {name} ({i}/{n})…",
+  "update.triggerAllDone": "Triggered updates for {n} agents"
 }
