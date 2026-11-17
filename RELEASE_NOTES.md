@@ -1,5 +1,14 @@
 # Release Notes
 
+## v0.8.1
+
+### Bug Fixes
+- **Billing edits apply without restart**: Expiry dates, quotas and other billing fields are now read live from the database instead of being cached at startup. Out-of-band DB edits (bulk migrations, manual maintenance) now take effect on the panel immediately; previously they were invisible until the server restarted.
+- **Nodes report IP changes automatically**: Agents now re-report system info when their interface addresses change, so a node that gains, loses or replaces an IP updates the panel within one reporting interval — no agent restart needed. The server already accepted repeated system-info updates; only the agent side needed fixing.
+
+### Changes
+- Version bump to 0.8.1
+
 ## v0.7.2
 
 ### Bug Fixes

@@ -208,9 +208,12 @@ pub fn set_iperf3_traffic_override(
 /// True when the agent's current billing-cycle traffic usage has reached its
 /// configured iperf3 auto-disable threshold.
 pub fn iperf3_blocked(state: &crate::state::AppState, agent_id: i64) -> bool {
-    let threshold = {
+    let (threshold, billing) = {
         let conn = state.db.lock().unwrap();
-        iperf3_traffic_threshold(&conn, agent_id).ok().flatten()
+        (
+            iperf3_traffic_threshold(&conn, agent_id).ok().flatten(),
+            crate::db::get_billing(&conn, agent_id).ok().flatten(),
+        )
     };
     let Some(threshold) = threshold else {
         return false;
@@ -219,7 +222,7 @@ pub fn iperf3_blocked(state: &crate::state::AppState, agent_id: i64) -> bool {
         let agents = state.agents.read().unwrap();
         agents
             .get(&agent_id)
-            .and_then(|a| a.billing.as_ref().and_then(|b| crate::billing::usage_percent(b, &a.traffic)))
+            .and_then(|a| billing.as_ref().and_then(|b| crate::billing::usage_percent(b, &a.traffic)))
     };
     pct.is_some_and(|p| p >= threshold)
 }

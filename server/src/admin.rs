@@ -709,9 +709,12 @@ fn bad(msg: &str) -> Response {
 // ------------------------------------------------------------------- agents
 
 async fn list_agents(State(state): State<SharedState>) -> Response {
-    let tokens = {
+    let (tokens, billing_map) = {
         let conn = state.db.lock().unwrap();
-        db::list_agent_tokens(&conn).unwrap_or_default()
+        (
+            db::list_agent_tokens(&conn).unwrap_or_default(),
+            db::list_billing(&conn).unwrap_or_default(),
+        )
     };
     let agents = state.agents.read().unwrap();
     let mut list: Vec<_> = agents
@@ -723,7 +726,7 @@ async fn list_agents(State(state): State<SharedState>) -> Response {
                 "online": a.online,
                 "region": a.region,
                 "features": a.features,
-                "billing": a.billing,
+                "billing": billing_map.get(id),
                 "token": tokens.get(id),
                 "app_version": a.app_version,
                 "platform": a.platform,
@@ -1804,10 +1807,16 @@ async fn update_billing(
         traffic_dir: body.traffic_dir,
     };
 
-    let rows = {
+    let (rows, old_reset) = {
         let conn = state.db.lock().unwrap();
+        // read the stored reset day before overwriting, so a changed day can
+        // still start a fresh traffic cycle below
+        let old_reset = db::get_billing(&conn, agent_id)
+            .ok()
+            .flatten()
+            .and_then(|b| b.reset_day);
         match db::set_billing(&conn, agent_id, &billing) {
-            Ok(r) => r,
+            Ok(r) => (r, old_reset),
             Err(e) => return db_err(e),
         }
     };
@@ -1818,7 +1827,6 @@ async fn update_billing(
     let traffic = {
         let mut agents = state.agents.write().unwrap();
         agents.get_mut(&agent_id).map(|a| {
-            let old_reset = a.billing.as_ref().and_then(|b| b.reset_day);
             if billing.reset_day != old_reset {
                 if let Some(rd) = billing.reset_day {
                     // changing the reset day starts a fresh cycle
@@ -1829,7 +1837,6 @@ async fn update_billing(
                     a.traffic.last_tx_total = None;
                 }
             }
-            a.billing = Some(billing.clone());
             (
                 TrafficUsage {
                     cycle_start: a.traffic.cycle_start,

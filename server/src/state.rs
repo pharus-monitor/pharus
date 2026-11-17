@@ -29,7 +29,6 @@ pub struct AgentState {
     pub conn_epoch: u64,
     pub info: Option<SystemInfo>,
     pub data: Option<Metrics>,
-    pub billing: Option<pharus_common::BillingInfo>,
     pub traffic: TrafficState,
     pub pings: Vec<PingResult>,
     pub unlock: Vec<UnlockResult>,
@@ -55,7 +54,7 @@ impl AgentState {
             online: self.online,
             info: self.info.clone(),
             data: self.data.clone(),
-            billing: self.billing.clone(),
+            billing: None,
             traffic: Some(TrafficUsage {
                 cycle_start: self.traffic.cycle_start,
                 rx_bytes: self.traffic.rx_bytes,
@@ -137,7 +136,7 @@ impl AppState {
     /// the agent's traffic usage has breached its auto-disable threshold, so
     /// the UI hides the control in addition to the endpoint refusing requests.
     pub fn snapshot_with_gates(&self, agent_id: i64) -> AgentSnapshot {
-        let snapshot = {
+        let mut snapshot = {
             let agents = self.agents.read().unwrap();
             match agents.get(&agent_id) {
                 Some(a) => a.snapshot(agent_id),
@@ -157,6 +156,12 @@ impl AppState {
                     containers: Vec::new(),
                 },
             }
+        };
+        // billing is read live from the DB (never cached on AgentState), so
+        // out-of-band edits reach the UI without a restart
+        snapshot.billing = {
+            let conn = self.db.lock().unwrap();
+            crate::db::get_billing(&conn, agent_id).ok().flatten()
         };
         if snapshot.features.iter().any(|f| f == "iperf3")
             && crate::features::iperf3_blocked(self, agent_id)

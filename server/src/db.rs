@@ -640,6 +640,12 @@ pub fn list_billing(conn: &Connection) -> Result<HashMap<i64, BillingInfo>> {
     Ok(rows)
 }
 
+/// Single-agent billing lookup. Agents read billing live instead of caching
+/// it in `AgentState`, so out-of-band DB edits take effect without a restart.
+pub fn get_billing(conn: &Connection, agent_id: i64) -> Result<Option<BillingInfo>> {
+    Ok(list_billing(conn)?.remove(&agent_id))
+}
+
 pub fn set_billing(conn: &Connection, agent_id: i64, b: &BillingInfo) -> Result<usize> {
     let rows = conn.execute(
         "UPDATE agents SET reset_day = ?2, quota_bytes = ?3, expires_at = ?4,

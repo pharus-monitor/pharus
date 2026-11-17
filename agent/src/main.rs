@@ -88,7 +88,7 @@ impl Config {
     }
 }
 
-fn collect_sysinfo(sys: &System, mem_desc: Option<String>) -> SystemInfo {
+fn collect_sysinfo(sys: &System, networks: &sysinfo::Networks, mem_desc: Option<String>) -> SystemInfo {
     let cpu_model = sys
         .cpus()
         .first()
@@ -103,13 +103,12 @@ fn collect_sysinfo(sys: &System, mem_desc: Option<String>) -> SystemInfo {
         cpu_cores: sys.cpus().len(),
         virtualization: None,
         mem_desc,
-        ips: collect_ips(),
+        ips: collect_ips_from(networks),
     }
 }
 
-fn collect_ips() -> Vec<String> {
+fn collect_ips_from(networks: &sysinfo::Networks) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let networks = sysinfo::Networks::new_with_refreshed_list();
     for data in networks.values() {
         for net in data.ip_networks() {
             let addr = net.addr;
@@ -2433,8 +2432,9 @@ async fn metrics_loop(
     sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
 
     let mem_desc = collect_mem_desc().await;
+    let mut last_ips = collect_ips_from(&networks);
     msg_tx.send(AgentMsg::SysInfo {
-        info: collect_sysinfo(&sys, mem_desc),
+        info: collect_sysinfo(&sys, &networks, mem_desc.clone()),
     })?;
 
     let mut prev_rx: u64 = networks.list().values().map(|n| n.total_received()).sum();
@@ -2476,6 +2476,16 @@ async fn metrics_loop(
         if last_extras.elapsed() >= Duration::from_secs(10) {
             extras = collect_extras(&mut sys, &mut components, &mut gpu_cache);
             last_extras = Instant::now();
+        }
+        // re-report system info when the interface addresses change, so a
+        // node that gained/lost/replaced an IP updates the panel without an
+        // agent restart (the server treats repeated SysInfo as an update)
+        let ips = collect_ips_from(&networks);
+        if ips != last_ips {
+            last_ips = ips;
+            msg_tx.send(AgentMsg::SysInfo {
+                info: collect_sysinfo(&sys, &networks, mem_desc.clone()),
+            })?;
         }
         let metrics = collect_metrics(&sys, &disks, rx_diff, tx_diff, rx, tx, write_diff, read_diff, elapsed, &extras);
         msg_tx.send(AgentMsg::Metrics { data: metrics })?;

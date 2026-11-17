@@ -327,45 +327,49 @@ struct AgentSnapshot {
 }
 
 fn snapshot_agents(state: &SharedState) -> Result<Vec<AgentSnapshot>> {
+    let billing_map = {
+        let conn = state.db.lock().unwrap();
+        crate::db::list_billing(&conn)?
+    };
     let agents = state
         .agents
         .read()
         .map_err(|_| anyhow!("agent state lock is poisoned"))?;
     let mut snapshots: Vec<_> = agents
         .iter()
-        .map(|(&id, agent)| AgentSnapshot {
-            id,
-            name: agent.name.clone(),
-            online: agent.online,
-            data: agent.data.clone(),
-            traffic_used: {
-                let traffic = &agent.traffic;
-                match agent.billing.as_ref().and_then(|b| b.traffic_mode.as_deref()) {
-                    Some("uni") => match agent.billing.as_ref().and_then(|b| b.traffic_dir.as_deref()) {
-                        Some("up") => traffic.tx_bytes,
-                        Some("max") => traffic.rx_bytes.max(traffic.tx_bytes),
-                        _ => traffic.rx_bytes,
-                    },
-                    _ => traffic.rx_bytes.saturating_add(traffic.tx_bytes),
-                }
-            },
-            traffic_quota: agent
-                .billing
-                .as_ref()
-                .and_then(|billing| billing.quota_bytes),
-            ping_loss: {
-                let losses: Vec<f64> = agent
-                    .pings
-                    .iter()
-                    .map(|p| p.loss)
-                    .filter(|l| *l >= 0.0 && *l <= 1.0)
-                    .collect();
-                if losses.is_empty() {
-                    None
-                } else {
-                    Some(losses.iter().sum::<f64>() / losses.len() as f64 * 100.0)
-                }
-            },
+        .map(|(&id, agent)| {
+            let billing = billing_map.get(&id);
+            AgentSnapshot {
+                id,
+                name: agent.name.clone(),
+                online: agent.online,
+                data: agent.data.clone(),
+                traffic_used: {
+                    let traffic = &agent.traffic;
+                    match billing.and_then(|b| b.traffic_mode.as_deref()) {
+                        Some("uni") => match billing.and_then(|b| b.traffic_dir.as_deref()) {
+                            Some("up") => traffic.tx_bytes,
+                            Some("max") => traffic.rx_bytes.max(traffic.tx_bytes),
+                            _ => traffic.rx_bytes,
+                        },
+                        _ => traffic.rx_bytes.saturating_add(traffic.tx_bytes),
+                    }
+                },
+                traffic_quota: billing.and_then(|billing| billing.quota_bytes),
+                ping_loss: {
+                    let losses: Vec<f64> = agent
+                        .pings
+                        .iter()
+                        .map(|p| p.loss)
+                        .filter(|l| *l >= 0.0 && *l <= 1.0)
+                        .collect();
+                    if losses.is_empty() {
+                        None
+                    } else {
+                        Some(losses.iter().sum::<f64>() / losses.len() as f64 * 100.0)
+                    }
+                },
+            }
         })
         .collect();
     snapshots.sort_unstable_by_key(|agent| agent.id);

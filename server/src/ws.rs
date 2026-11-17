@@ -204,11 +204,18 @@ pub async fn handle_agent_socket(state: SharedState, socket: WebSocket) {
                     }
                     Ok(AgentMsg::Metrics { data }) => {
                         {
+                            // billing is read live so quota changes apply to the
+                            // in-flight traffic accounting immediately
+                            let b = {
+                                let conn = state.db.lock().unwrap();
+                                crate::db::get_billing(&conn, agent_id)
+                                    .ok()
+                                    .flatten()
+                                    .unwrap_or_default()
+                            };
                             let mut agents = state.agents.write().unwrap();
                             if let Some(a) = agents.get_mut(&agent_id) {
-                                let default_billing = pharus_common::BillingInfo::default();
-                                let b = a.billing.as_ref().unwrap_or(&default_billing);
-                                crate::billing::apply_metrics(&mut a.traffic, b, &data, chrono::Local::now());
+                                crate::billing::apply_metrics(&mut a.traffic, &b, &data, chrono::Local::now());
                                 a.data = Some(data.clone());
                             }
                         }

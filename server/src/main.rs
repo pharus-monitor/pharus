@@ -205,7 +205,6 @@ async fn serve(
         db::insert_user(&conn, &admin_user, &hash, "admin")?;
     }
 
-    let billing_map = db::list_billing(&conn)?;
     let traffic_map = db::load_traffic(&conn)?;
     let region_map = db::list_regions(&conn)?;
     let mut agents = HashMap::new();
@@ -224,7 +223,6 @@ async fn serve(
             id,
             AgentState {
                 name,
-                billing: billing_map.get(&id).cloned(),
                 traffic,
                 region: region_map.get(&id).map(|(c, s)| db::make_region(c, s)),
                 features: features::effective_for(&conn, id).unwrap_or_default(),
