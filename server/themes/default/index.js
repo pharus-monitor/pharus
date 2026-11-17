@@ -120,26 +120,58 @@
     card.region.title = entry.region.name || entry.region.code || '';
   }
 
+  // Update result chips in place, reusing existing nodes by label so the
+  // periodic ping/unlock pushes don't visibly rebuild (and flicker) the card.
+  function updateChips(container, items) {
+    var byLabel = {};
+    Array.prototype.forEach.call(container.children, function (chip) {
+      byLabel[chip.dataset.label] = chip;
+    });
+    var frag = document.createDocumentFragment();
+    items.forEach(function (item) {
+      var chip = byLabel[item.label];
+      if (chip) {
+        delete byLabel[item.label];
+        chip.querySelector('.num').textContent = item.value;
+        chip.className = 'result-chip' + (item.cls ? ' ' + item.cls : '');
+      } else {
+        chip = document.createElement('span');
+        chip.className = 'result-chip' + (item.cls ? ' ' + item.cls : '');
+        chip.dataset.label = item.label;
+        var name = document.createElement('b');
+        name.textContent = item.label;
+        var val = document.createElement('span');
+        val.className = 'num';
+        val.textContent = item.value;
+        chip.appendChild(name);
+        chip.appendChild(val);
+      }
+      frag.appendChild(chip);
+    });
+    container.replaceChildren(frag);
+  }
+
   function renderPings(card, entry) {
     card.pingSection.hidden = !entry.pings || !entry.pings.length;
-    card.pings.innerHTML = '';
-    if (card.pingSection.hidden) return;
-    entry.pings.forEach(function (result) {
+    if (card.pingSection.hidden) { card.pings.replaceChildren(); return; }
+    updateChips(card.pings, entry.pings.map(function (result) {
       var loss = result.loss == null ? 0 : Math.max(0, Math.min(1, result.loss));
       var value = result.rtt_ms == null
         ? t('ping.unreachable')
         : Number(result.rtt_ms).toFixed(1) + ' ms';
       value += ' · ' + Math.round(loss * 100) + '% ' + t('ping.lossShort');
-      P.chip(card.pings, result.label || ('#' + (result.task_id == null ? '—' : result.task_id)), value,
-        result.rtt_ms == null || loss > 0.2 ? 'crit' : loss > 0 ? 'warn' : 'ok');
-    });
+      return {
+        label: result.label || ('#' + (result.task_id == null ? '—' : result.task_id)),
+        value: value,
+        cls: result.rtt_ms == null || loss > 0.2 ? 'crit' : loss > 0 ? 'warn' : 'ok'
+      };
+    }));
   }
 
   function renderUnlock(card, entry) {
     card.unlockSection.hidden = !entry.unlock || !entry.unlock.length;
-    card.unlock.innerHTML = '';
-    if (card.unlockSection.hidden) return;
-    entry.unlock.forEach(function (result) {
+    if (card.unlockSection.hidden) { card.unlock.replaceChildren(); return; }
+    updateChips(card.unlock, entry.unlock.map(function (result) {
       var status = P.serviceStatus(result);
       var label = result.service || result.name || t('streaming.service');
       // Dual-stack agents report each service once per address family.
@@ -148,8 +180,8 @@
       var unlocked = P.statusClass(status) === 'ok';
       var detail = result.region || result.detail
         || (unlocked && entry.region ? (entry.region.code || entry.region.name) : t('streaming.status.' + status));
-      P.chip(card.unlock, label, detail, P.statusClass(status));
-    });
+      return { label: label, value: detail, cls: P.statusClass(status) };
+    }));
   }
 
   function readOrder(key) {
