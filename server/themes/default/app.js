@@ -22,7 +22,8 @@
 
   function loadLang(lang) {
     if (window.PHARUS_DEMO_I18N) return Promise.resolve(window.PHARUS_DEMO_I18N);
-    return fetch('i18n/' + lang + '.json').then(function (r) {
+    // bust browser-cached translations when the theme ships new keys
+    return fetch('i18n/' + lang + '.json?v=0.8.1').then(function (r) {
       if (!r.ok) throw new Error('lang ' + r.status);
       return r.json();
     });
