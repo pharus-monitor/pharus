@@ -324,17 +324,45 @@
 
   function renderAgentLayout() {
     var agents = sortedAgents();
-    grid.innerHTML = '';
-    grid.classList.toggle('is-grouped', groupedView);
-    groupToggle.setAttribute('aria-pressed', groupedView ? 'true' : 'false');
-    var toggleLabel = groupToggle.querySelector('[data-i18n]');
-    toggleLabel.setAttribute('data-i18n', groupedView ? 'region.grouped' : 'region.flat');
-    toggleLabel.textContent = t(groupedView ? 'region.grouped' : 'region.flat');
-
+    // Touching the DOM here replays every card's `card-in` animation, which
+    // reads as the whole page flickering whenever an agent reconnects and a
+    // fresh snapshot arrives. Skip entirely when the layout is unchanged.
     if (!groupedView) {
+      grid.classList.toggle('is-grouped', false);
+      groupToggle.setAttribute('aria-pressed', 'false');
+      var toggleLabel = groupToggle.querySelector('[data-i18n]');
+      toggleLabel.setAttribute('data-i18n', 'region.flat');
+      toggleLabel.textContent = t('region.flat');
+      // drop region-group sections left over from grouped view
+      Array.prototype.slice.call(grid.children).forEach(function (el) {
+        if (!(el.classList && el.classList.contains('card'))) el.remove();
+      });
+      var cards = Array.prototype.filter.call(grid.children, function (el) {
+        return el.classList.contains('card');
+      });
+      var same = cards.length === agents.length && agents.every(function (pair, i) {
+        return cards[i] === ensureCard(pair[0]).el;
+      });
+      if (same) return;
+      grid.dataset.layoutMode = 'f';
+      grid.dataset.layoutSig = '';
       agents.forEach(function (pair) { grid.appendChild(ensureCard(pair[0]).el); });
       return;
     }
+    var sig = agents.map(function (pair) {
+      var region = pair[1].region;
+      var key = region && region.code ? region.code : '__ungrouped';
+      return key + (collapsedRegions.has(key) ? ':c' : '');
+    }).join('|');
+    grid.classList.toggle('is-grouped', true);
+    groupToggle.setAttribute('aria-pressed', 'true');
+    if (grid.dataset.layoutMode === 'g' && grid.dataset.layoutSig === sig) return;
+    grid.dataset.layoutMode = 'g';
+    grid.dataset.layoutSig = sig;
+    grid.innerHTML = '';
+    var toggleLabel = groupToggle.querySelector('[data-i18n]');
+    toggleLabel.setAttribute('data-i18n', 'region.grouped');
+    toggleLabel.textContent = t('region.grouped');
 
     var groups = new Map();
     agents.forEach(function (pair) {
@@ -453,11 +481,19 @@
   }
 
   function setStatus(card, online) {
-    card.status.innerHTML = '';
-    var dot = document.createElement('span');
-    dot.className = 'dot';
-    card.status.appendChild(dot);
-    card.status.appendChild(document.createTextNode(online ? t('status.online') : t('status.offline')));
+    var label = t(online ? 'status.online' : 'status.offline');
+    // rebuilding the pill restarts the dot's pulse animation on every
+    // metrics push; rebuild only when the state actually flips
+    if (card.status.dataset.online !== String(online)) {
+      card.status.dataset.online = String(online);
+      card.status.innerHTML = '';
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      card.status.appendChild(dot);
+      card.status.appendChild(document.createTextNode(label));
+    } else if (card.status.lastChild && card.status.lastChild.textContent !== label) {
+      card.status.lastChild.textContent = label;
+    }
     card.status.classList.toggle('online', online);
     card.el.classList.toggle('is-online', online);
     card.el.classList.toggle('is-offline', !online);
